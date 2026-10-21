@@ -11,6 +11,13 @@ const API = (() => {
       }
     }
     const res = await fetch(path, opts);
+    // The panel was updated while this tab was open: its scripts are now out of date.
+    const build = res.headers.get("X-Aurora-Build");
+    const mine = document.querySelector('meta[name="aurora-build"]');
+    if (build && mine && build !== mine.content && !request.stale) {
+      request.stale = true;
+      window.dispatchEvent(new CustomEvent("aurora-updated"));
+    }
     if (res.status === 401) {
       const err = new Error("Not authenticated");
       err.status = 401;
@@ -325,6 +332,12 @@ const API = (() => {
     mysqlCreate: (name) => request("POST", "/api/db/mysql/create", { name }),
     mysqlDrop: (name) => request("POST", "/api/db/mysql/drop", { name }),
     mysqlWizard: (b) => request("POST", "/api/db/mysql/wizard", b),
+    mysqlUserCreate: (b) => request("POST", "/api/db/mysql/user/create", b),
+    mysqlUserPassword: (user, host, password) => request("POST", "/api/db/mysql/user/password", { user, host, password }),
+    mysqlUserAdmin: (user, host, admin) => request("POST", "/api/db/mysql/user/admin", { user, host, admin }),
+    mysqlUserDrop: (user, host) => request("POST", "/api/db/mysql/user/drop", { user, host }),
+    mysqlGrant: (db, user, host, on) => request("POST", "/api/db/mysql/grant", { db, user, host, on }),
+    phpmyadminInstall: () => request("POST", "/api/db/phpmyadmin/install"),
     pg: () => request("GET", "/api/db/pg"),
     pgCreate: (name, owner) => request("POST", "/api/db/pg/create", { name, owner: owner || "" }),
     pgRoleCreate: (b) => request("POST", "/api/db/pg/role/create", b),

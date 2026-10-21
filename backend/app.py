@@ -37,6 +37,21 @@ FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 APP_VERSION = str(int(time.time()))
 
 
+def _frontend_build() -> str:
+    """Changes only when the panel's code does (unlike APP_VERSION, which changes on every
+    restart): open tabs compare it to spot an update and offer a reload."""
+    import hashlib
+    h = hashlib.sha256(version.VERSION.encode())
+    front = Path(__file__).resolve().parent.parent / "frontend"
+    for f in sorted(front.rglob("*")):
+        if f.suffix in (".js", ".css", ".html") and f.is_file():
+            h.update(f"{f.relative_to(front)}:{f.stat().st_size}:{int(f.stat().st_mtime)}".encode())
+    return h.hexdigest()[:12]
+
+
+FRONTEND_BUILD = _frontend_build()
+
+
 @app.middleware("http")
 async def _no_stale_frontend(request, call_next):
     """Force browsers to revalidate HTML/JS/CSS so a redeploy is never masked by
@@ -46,6 +61,8 @@ async def _no_stale_frontend(request, call_next):
     path = request.url.path
     if path == "/" or path.endswith((".html", ".js", ".css")):
         response.headers["Cache-Control"] = "no-cache"
+    if path.startswith("/api/"):
+        response.headers["X-Aurora-Build"] = FRONTEND_BUILD
     # Defence in depth against XSS: even if untrusted text (log lines, usernames
     # from the Network Monitor…) ever reached innerHTML, no script could run —
     # only our own same-origin files are executable; no inline/eval, no plugins.
@@ -61,7 +78,7 @@ async def _no_stale_frontend(request, call_next):
 
 def _render_index() -> HTMLResponse:
     html = (FRONTEND_DIR / "index.html").read_text(encoding="utf-8")
-    html = html.replace("__V__", APP_VERSION)
+    html = html.replace("__V__", APP_VERSION).replace("__BUILD__", FRONTEND_BUILD)
     return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
 
 
@@ -1559,8 +1576,11 @@ def api_db_overview(user: str = auth.CurrentUser):
 
 @app.get("/api/db/mysql")
 def api_db_mysql(user: str = auth.CurrentUser):
+    st = databases.mysql_status()
+    if not (st["installed"] and st["running"]):
+        return {**st, "databases": [], "users": [], "phpmyadmin": databases.phpmyadmin_status()}
     try:
-        return {"databases": databases.mysql_databases(), "users": databases.mysql_users()}
+        return {**st, **databases.mysql_overview(), "phpmyadmin": databases.phpmyadmin_status()}
     except databases.DatabaseError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -1594,6 +1614,51 @@ def _db_call(fn):
         return fn()
     except databases.DatabaseError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+class MyUserBody(BaseModel):
+    user: str
+    host: str = "localhost"
+    password: str = ""
+    db: str = ""
+    admin: bool = False
+
+
+class MyGrantBody(BaseModel):
+    db: str
+    user: str
+    host: str = "localhost"
+    on: bool = True
+
+
+@app.post("/api/db/mysql/user/create")
+def api_db_mysql_user_create(body: MyUserBody, user: str = auth.CurrentUser):
+    return _db_call(lambda: databases.mysql_create_user(body.user, body.host, body.password, body.db, body.admin))
+
+
+@app.post("/api/db/mysql/user/password")
+def api_db_mysql_user_password(body: MyUserBody, user: str = auth.CurrentUser):
+    return _db_call(lambda: databases.mysql_set_password(body.user, body.host, body.password))
+
+
+@app.post("/api/db/mysql/user/admin")
+def api_db_mysql_user_admin(body: MyUserBody, user: str = auth.CurrentUser):
+    return _db_call(lambda: databases.mysql_set_admin(body.user, body.host, body.admin))
+
+
+@app.post("/api/db/mysql/user/drop")
+def api_db_mysql_user_drop(body: MyUserBody, user: str = auth.CurrentUser):
+    return _db_call(lambda: databases.mysql_drop_user(body.user, body.host))
+
+
+@app.post("/api/db/mysql/grant")
+def api_db_mysql_grant(body: MyGrantBody, user: str = auth.CurrentUser):
+    return _db_call(lambda: databases.mysql_grant(body.db, body.user, body.host, body.on))
+
+
+@app.post("/api/db/phpmyadmin/install")
+def api_db_phpmyadmin_install(user: str = auth.CurrentUser):
+    return _db_call(lambda: {"job": databases.phpmyadmin_install().id})
 
 
 class PGCreateBody(BaseModel):

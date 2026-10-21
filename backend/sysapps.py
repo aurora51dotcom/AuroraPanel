@@ -115,6 +115,20 @@ def _dpkg_status(pkgs: list[str]) -> dict[str, str | None]:
     return result
 
 
+def _dpkg_broken(pkgs: list[str]) -> set[str]:
+    """Packages whose install stopped part-way (dpkg "iF" half-configured, "iU" unpacked, …)."""
+    if not IS_LINUX or not shutil.which("dpkg-query"):
+        return set()
+    out = subprocess.run(["dpkg-query", "-W", "-f=${Package}\t${db:Status-Abbrev}\n", *pkgs],
+                         capture_output=True, text=True, timeout=15)
+    broken = set()
+    for line in out.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) == 2 and parts[1][:1] == "i" and parts[1][1:2] not in ("i", "n"):
+            broken.add(parts[0])
+    return broken
+
+
 def _pg_server_pkgs() -> dict[str, str]:
     """Installed versioned server packages (postgresql-17 …) -> version. The "postgresql"
     metapackage is optional, so these are what really say Postgres is installed."""
@@ -185,6 +199,7 @@ def status() -> dict:
     if not IS_LINUX:
         return {"supported": False, "apps": []}
     versions = _dpkg_status([v["pkg"] for v in CATALOG.values()])
+    broken = _dpkg_broken([v["pkg"] for v in CATALOG.values()])
     pg = _pg_server_pkgs()
     if pg:
         versions["postgresql"] = pg[max(pg, key=lambda p: int(p.split("-")[1]))]
@@ -198,6 +213,7 @@ def status() -> dict:
         apps.append({
             "id": k, "name": v["name"], "group": v["group"], "desc": v["desc"], "ram_typical": v["ram"],
             "package": v["pkg"], "service": svc, "installed": installed, "version": versions.get(v["pkg"]),
+            "broken": not installed and v["pkg"] in broken,
             "active": bool(svc and active.get(svc)), "ram_mb": ram.get(k),
             "docroot": _docroot(k) if installed else None,
         })
@@ -258,6 +274,10 @@ def install(app_id: str, switch: bool = False) -> jobs.Job:
     _check_port80(app_id, switch)
     global _web_cache
     _web_cache = (0.0, None)
+    if v["pkg"] in _dpkg_broken([v["pkg"]]):
+        # A previous install stopped part-way: finish configuring it, then let apt fix up the rest.
+        script = f"dpkg --force-confold --configure -a; {' '.join(_APT)} -f install && {' '.join(_APT)} install {v['pkg']}"
+        return jobs.launch(f"repair {v['name']}", ["bash", "-c", script], env=_APT_ENV, meta={"app": app_id})
     return jobs.launch(f"install {v['name']}", [*_APT, "install", v["pkg"]], env=_APT_ENV, meta={"app": app_id})
 
 

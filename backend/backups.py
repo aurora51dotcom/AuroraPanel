@@ -116,6 +116,14 @@ def _pg_check():
         raise BackupError(str(exc))
 
 
+def _my_check():
+    from . import databases
+    try:
+        databases.mysql_require()
+    except databases.DatabaseError as exc:
+        raise BackupError(str(exc))
+
+
 def _pg_dbs() -> list[str]:
     if not _pg_ready():
         return []
@@ -150,6 +158,8 @@ def wizard_create(kind: str, paths: list[str] | None = None, mysql: list[str] | 
     pgsql = [d for d in (pgsql or []) if _DB.match(d)]
     if not paths and not mysql and not pgsql:
         raise BackupError("Pick at least one folder or database")
+    if mysql:
+        _my_check()
     if pgsql:
         _pg_check()
     if label and not _NAME_RE.match(label):
@@ -224,6 +234,8 @@ def wizard_restore(name: str, paths: list[str] | None = None, mysql: list[str] |
     pgsql = [d for d in (pgsql or []) if d in man["pgsql"]]
     if not paths and not mysql and not pgsql:
         raise BackupError("Pick what to restore")
+    if mysql:
+        _my_check()
     if pgsql:
         _pg_check()
 

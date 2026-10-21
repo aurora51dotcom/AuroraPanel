@@ -378,8 +378,10 @@ def _validate(opts: dict) -> dict:
 
 
 def install_wordpress(opts: dict) -> jobs.Job:
-    if not databases.mysql_available():
-        raise AppError("MariaDB/MySQL is not installed — install it from Databases first")
+    try:
+        databases.mysql_require()
+    except databases.DatabaseError as exc:
+        raise AppError(str(exc))
     if not shutil.which("apache2ctl"):
         raise AppError("Apache is not installed")
     o = _validate(opts)

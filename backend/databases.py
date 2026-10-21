@@ -15,7 +15,7 @@ from . import jobs
 
 IS_LINUX = platform.system() == "Linux"
 _IDENT = re.compile(r"^[A-Za-z0-9_]{1,64}$")
-_HOST = re.compile(r"^[A-Za-z0-9_%.-]{1,60}$")
+_HOST = re.compile(r"^[A-Za-z0-9_%.:-]{1,60}$")
 _MYSQL_SYS = {"mysql", "information_schema", "performance_schema", "sys"}
 _PG_SYS = {"postgres", "template0", "template1"}
 
@@ -39,40 +39,138 @@ def _password(pw: str) -> str:
 
 
 # =========================== MariaDB / MySQL ===============================
+_MY_SERVER_PKGS = ("mariadb-server", "mysql-server", "default-mysql-server")
+_MY_UNITS = ("mariadb", "mysql")
+
+
+def mysql_status() -> dict:
+    """Is a MariaDB/MySQL *server* installed and running? The mysql client alone (pulled in
+    by phpMyAdmin, PHP, …) isn't enough: without the server every query fails with
+    "Can't connect to local server through socket '/run/mysqld/mysqld.sock'"."""
+    st = {"installed": False, "running": False, "broken": False}
+    if not IS_LINUX:
+        return st
+    if shutil.which("dpkg-query"):
+        out = subprocess.run(["dpkg-query", "-W", "-f=${db:Status-Abbrev}\n", *_MY_SERVER_PKGS],
+                             capture_output=True, text=True, timeout=15)
+        flags = [l.strip() for l in out.stdout.splitlines() if l.strip()]
+        st["installed"] = any(f.startswith("ii") for f in flags)
+        # e.g. "iF" (half-configured) / "iU" (unpacked): an install that failed part-way.
+        st["broken"] = not st["installed"] and any(f[:1] == "i" and f[1:2] not in ("i", "n") for f in flags)
+    else:
+        st["installed"] = bool(shutil.which("mariadbd") or shutil.which("mysqld") or Path("/usr/sbin/mariadbd").exists())
+    if st["installed"] or st["broken"]:
+        r = subprocess.run(["systemctl", "is-active", *_MY_UNITS], capture_output=True, text=True, timeout=10)
+        st["running"] = "active" in r.stdout.split()
+    return st
+
+
+def mysql_require():
+    if not IS_LINUX:
+        raise DatabaseError("MariaDB/MySQL management is only available on Linux")
+    st = mysql_status()
+    if st["broken"]:
+        raise DatabaseError("MariaDB's installation didn't finish. Click Repair in System Applications → Extras "
+                            "(or the Repair button on the Databases page).")
+    if not st["installed"]:
+        raise DatabaseError("MariaDB isn't installed on this Pi. Install it from System Applications → Extras "
+                            "(or the Install button on the Databases page).")
+    if not st["running"]:
+        raise DatabaseError("MariaDB is installed but not running. Start it from System Applications → Extras.")
+    if not shutil.which("mysql"):
+        raise DatabaseError("The MariaDB client (mysql) is missing — reinstall MariaDB from System Applications.")
+
+
 def mysql_available() -> bool:
-    return bool(IS_LINUX and shutil.which("mysql"))
+    st = mysql_status()
+    return bool(st["installed"] and st["running"] and shutil.which("mysql"))
 
 
 def _mysql(sql: str) -> str:
-    if not mysql_available():
-        raise DatabaseError("MariaDB/MySQL client is not installed")
+    mysql_require()
     out = subprocess.run(["mysql", "-N", "-B", "-e", sql], capture_output=True, text=True, timeout=30)
     if out.returncode != 0:
         raise DatabaseError(out.stderr.strip() or "MySQL command failed")
     return out.stdout
 
 
+_MY_BUILTIN_USERS = {"root", "mysql", "mariadb.sys", "debian-sys-maint", "mysql.sys", "mysql.session", "mysql.infoschema"}
+# Created by the phpmyadmin package (its own settings storage) — managing them here would break phpMyAdmin.
+_MY_APP_OWNED = {"phpmyadmin"}
+
+
+def _my_rows(sql: str) -> list[list[str]]:
+    return [line.split("\t") for line in _mysql(sql).splitlines() if line]
+
+
+def _my_unescape(s: str) -> str:
+    # mysql -B escapes backslashes; mysql.db stores `a_b` grants as a\_b (phpMyAdmin style).
+    return s.replace("\\\\", "\\").replace("\\_", "_").replace("\\%", "%")
+
+
+def _my_account(user: str, host: str) -> str:
+    if not re.match(r"^[A-Za-z0-9_.-]{1,80}$", user or ""):
+        raise DatabaseError("Invalid username (letters, digits, underscore, dot, dash)")
+    if not _HOST.match(host or ""):
+        raise DatabaseError("Invalid host")
+    return f"`{user}`@`{host}`"
+
+
+def _my_user_exists(user: str, host: str) -> bool:
+    return bool(_my_rows(f"SELECT 1 FROM mysql.user WHERE User='{user}' AND Host='{host}';"))
+
+
+def _my_protected(user: str) -> bool:
+    return user in _MY_BUILTIN_USERS or user in _MY_APP_OWNED
+
+
 def mysql_databases() -> list[dict]:
-    dbs = []
-    for line in _mysql("SHOW DATABASES;").splitlines():
-        name = line.strip()
-        if name:
-            dbs.append({"name": name, "system": name in _MYSQL_SYS})
-    return dbs
+    return [{"name": n, "system": n in _MYSQL_SYS} for (n, *_) in _my_rows("SHOW DATABASES;")]
 
 
 def mysql_users() -> list[dict]:
+    return [{"user": u, "host": h} for u, h in _my_rows("SELECT User, Host FROM mysql.user;")]
+
+
+def mysql_overview() -> dict:
+    """Databases (size, tables, charset, who has access) and users (password, admin, databases)."""
+    sizes = {r[0]: (int(float(r[1] or 0)), int(r[2] or 0)) for r in _my_rows(
+        "SELECT table_schema, COALESCE(SUM(data_length + index_length), 0), COUNT(*) "
+        "FROM information_schema.tables GROUP BY table_schema;")}
+    access: dict[str, list[str]] = {}
+    for db, u, h in _my_rows("SELECT Db, User, Host FROM mysql.db;"):
+        access.setdefault(_my_unescape(db), []).append(f"{u}@{h}")
+    dbs = []
+    for name, charset in _my_rows("SELECT SCHEMA_NAME, DEFAULT_CHARACTER_SET_NAME FROM information_schema.SCHEMATA ORDER BY SCHEMA_NAME;"):
+        size, tables = sizes.get(name, (0, 0))
+        dbs.append({"name": name, "system": name in _MYSQL_SYS, "app": "phpMyAdmin" if name in _MY_APP_OWNED else "",
+                    "size": _human(size), "tables": tables, "charset": charset,
+                    "access": sorted(access.get(name, []))})
     users = []
-    for line in _mysql("SELECT User, Host FROM mysql.user;").splitlines():
-        parts = line.split("\t")
-        if len(parts) == 2:
-            users.append({"user": parts[0], "host": parts[1]})
-    return users
+    for u, h, auth, priv_super, priv_grant in _my_rows(
+            "SELECT User, Host, authentication_string, Super_priv, Grant_priv FROM mysql.user ORDER BY User, Host;"):
+        acct = f"{u}@{h}"
+        users.append({"user": u, "host": h, "account": acct,
+                      "has_password": auth not in ("", "invalid") and not auth.startswith("*THISISNOTAVALIDPASSWORD"),
+                      "admin": priv_super == "Y", "can_grant": priv_grant == "Y",
+                      "databases": sorted(d for d, accts in access.items() if acct in accts),
+                      "system": u in _MY_BUILTIN_USERS, "app": "phpMyAdmin" if u in _MY_APP_OWNED else ""})
+    return {"databases": dbs, "users": users}
+
+
+def _human(n: int) -> str:
+    for unit in ("bytes", "KB", "MB", "GB"):
+        if n < 1024 or unit == "GB":
+            return f"{n} {unit}" if unit == "bytes" else f"{n:.1f} {unit}"
+        n /= 1024
+    return str(n)
 
 
 def mysql_create_db(name: str) -> dict:
     _ident(name, "database name")
-    _mysql(f"CREATE DATABASE `{name}`;")
+    if _my_rows(f"SHOW DATABASES LIKE '{name.replace('_', chr(92) + '_')}';"):
+        raise DatabaseError(f"A database named {name} already exists")
+    _mysql(f"CREATE DATABASE `{name}` CHARACTER SET utf8mb4;")
     return {"ok": True}
 
 
@@ -80,30 +178,124 @@ def mysql_drop_db(name: str) -> dict:
     _ident(name, "database name")
     if name in _MYSQL_SYS:
         raise DatabaseError("Refusing to drop a system database")
+    if name in _MY_APP_OWNED:
+        raise DatabaseError("This database stores phpMyAdmin's own settings — remove phpMyAdmin instead")
     _mysql(f"DROP DATABASE `{name}`;")
+    # Database-level grants outlive the database in mysql.db; clear them so a new database
+    # with the same name doesn't silently inherit the old users.
+    for u, h in _my_rows(f"SELECT User, Host FROM mysql.db WHERE Db IN ('{name}', '{name.replace('_', chr(92) * 2 + '_')}');"):
+        _mysql(f"REVOKE ALL PRIVILEGES ON `{name}`.* FROM {_my_account(u, h)};")
     return {"ok": True}
 
 
-def mysql_create_user(user: str, host: str, password: str) -> dict:
-    _ident(user, "username")
-    if not _HOST.match(host or ""):
-        raise DatabaseError("Invalid host")
+def mysql_create_user(user: str, host: str, password: str, db: str = "", admin: bool = False) -> dict:
+    acct = _my_account(user, host)
     _password(password)
-    _mysql(f"CREATE USER `{user}`@`{host}` IDENTIFIED BY '{password}';")
+    if db:
+        _ident(db, "database name")
+    if _my_user_exists(user, host):
+        raise DatabaseError(f"The user {user}@{host} already exists")
+    _mysql(f"CREATE USER {acct} IDENTIFIED BY '{password}';")
+    if db:
+        _mysql(f"GRANT ALL PRIVILEGES ON `{db}`.* TO {acct};")
+    if admin:
+        _mysql(f"GRANT ALL PRIVILEGES ON *.* TO {acct} WITH GRANT OPTION;")
+    return {"ok": True, "user": f"{user}@{host}"}
+
+
+def _my_manageable(user: str, host: str) -> str:
+    acct = _my_account(user, host)
+    if user in _MY_APP_OWNED:
+        raise DatabaseError(f"{user} is phpMyAdmin's own account — changing it would break phpMyAdmin")
+    if _my_protected(user):
+        raise DatabaseError(f"{user} is a built-in account — it can't be changed here")
+    if not _my_user_exists(user, host):
+        raise DatabaseError(f"No such user {user}@{host}")
+    return acct
+
+
+def mysql_set_password(user: str, host: str, password: str) -> dict:
+    acct = _my_manageable(user, host)
+    _password(password)
+    _mysql(f"ALTER USER {acct} IDENTIFIED BY '{password}';")
+    return {"ok": True}
+
+
+def mysql_drop_user(user: str, host: str) -> dict:
+    _mysql(f"DROP USER {_my_manageable(user, host)};")
+    return {"ok": True}
+
+
+def mysql_grant(db: str, user: str, host: str, on: bool) -> dict:
+    """Full access (all privileges) to one database — or take it away."""
+    _ident(db, "database name")
+    acct = _my_manageable(user, host)
+    if on:
+        _mysql(f"GRANT ALL PRIVILEGES ON `{db}`.* TO {acct};")
+    elif _my_rows(f"SELECT 1 FROM mysql.db WHERE User='{user}' AND Host='{host}' AND Db IN ('{db}', '{db.replace('_', chr(92) * 2 + '_')}');"):
+        _mysql(f"REVOKE ALL PRIVILEGES ON `{db}`.* FROM {acct};")
+    return {"ok": True}
+
+
+def mysql_set_admin(user: str, host: str, on: bool) -> dict:
+    """Admin = every privilege on every database (what phpMyAdmin needs for full control).
+    Revoking only touches the global level, so per-database access stays."""
+    acct = _my_manageable(user, host)
+    if on:
+        _mysql(f"GRANT ALL PRIVILEGES ON *.* TO {acct} WITH GRANT OPTION;")
+    else:
+        _mysql(f"REVOKE ALL PRIVILEGES ON *.* FROM {acct}; REVOKE GRANT OPTION ON *.* FROM {acct};")
     return {"ok": True}
 
 
 def mysql_wizard(db: str, user: str, password: str, host: str = "localhost") -> dict:
     """Create a database + user and grant the user full access to it."""
     _ident(db, "database name")
-    _ident(user, "username")
-    if not _HOST.match(host or ""):
-        raise DatabaseError("Invalid host")
+    acct = _my_account(user, host)
     _password(password)
-    _mysql(f"CREATE DATABASE IF NOT EXISTS `{db}`;")
-    _mysql(f"CREATE USER IF NOT EXISTS `{user}`@`{host}` IDENTIFIED BY '{password}';")
-    _mysql(f"GRANT ALL PRIVILEGES ON `{db}`.* TO `{user}`@`{host}`; FLUSH PRIVILEGES;")
+    if _my_rows(f"SHOW DATABASES LIKE '{db.replace('_', chr(92) + '_')}';"):
+        raise DatabaseError(f"A database named {db} already exists — pick another name, or give a user access to it in Manage Databases")
+    if _my_user_exists(user, host):
+        raise DatabaseError(f"The user {user}@{host} already exists — pick another name, or give it access in Manage Databases")
+    _mysql(f"CREATE DATABASE `{db}` CHARACTER SET utf8mb4;")
+    _mysql(f"CREATE USER {acct} IDENTIFIED BY '{password}';")
+    _mysql(f"GRANT ALL PRIVILEGES ON `{db}`.* TO {acct};")
     return {"ok": True, "database": db, "user": f"{user}@{host}"}
+
+
+def phpmyadmin_status() -> dict:
+    return {"installed": phpmyadmin_installed(), "path": "/phpmyadmin",
+            "enabled": Path("/etc/apache2/conf-enabled/phpmyadmin.conf").exists(),
+            "apache": subprocess.run(["systemctl", "is-active", "--quiet", "apache2"]).returncode == 0 if IS_LINUX else False}
+
+
+def phpmyadmin_install() -> jobs.Job:
+    """apt-get install phpmyadmin, answering its setup questions: configure Apache and
+    let dbconfig-common create phpMyAdmin's settings database over the root socket."""
+    mysql_require()
+    if not shutil.which("apache2ctl"):
+        raise DatabaseError("phpMyAdmin needs Apache — install it in System Applications first")
+
+    def fn(log):
+        env = {"DEBIAN_FRONTEND": "noninteractive", "PATH": "/usr/sbin:/usr/bin:/sbin:/bin"}
+        seed = ("phpmyadmin phpmyadmin/reconfigure-webserver multiselect apache2\n"
+                "phpmyadmin phpmyadmin/dbconfig-install boolean true\n")
+        subprocess.run(["debconf-set-selections"], input=seed, text=True, capture_output=True, timeout=30)
+        log("• Installing phpMyAdmin (apt-get install phpmyadmin)…")
+        r = subprocess.run(["apt-get", "-o", "DPkg::Lock::Timeout=600", "-y", "install", "phpmyadmin"],
+                           capture_output=True, text=True, timeout=1800, env=env)
+        for line in (r.stdout + r.stderr).splitlines()[-25:]:
+            log(line)
+        if r.returncode != 0:
+            raise DatabaseError("apt-get install phpmyadmin failed")
+        if not Path("/etc/apache2/conf-enabled/phpmyadmin.conf").exists() and Path("/etc/apache2/conf-available/phpmyadmin.conf").exists():
+            subprocess.run(["a2enconf", "phpmyadmin"], capture_output=True, text=True, timeout=30)
+        from . import webaccess
+        webaccess._reload_apache()
+        log("✔ phpMyAdmin is ready at /phpmyadmin")
+        return phpmyadmin_status()
+
+    return jobs.launch_fn("install phpMyAdmin", fn)
 
 
 # =============================== PostgreSQL =================================
@@ -521,7 +713,7 @@ def overview() -> dict:
     return {
         "mysql": {"available": mysql_available()},
         "postgres": {"available": pg_available()},
-        "phpmyadmin": {"installed": phpmyadmin_installed(), "path": "/phpmyadmin"},
+        "phpmyadmin": phpmyadmin_status(),
         "phppgadmin": {"installed": phppgadmin_installed(), "path": "/phppgadmin"},
     }
 

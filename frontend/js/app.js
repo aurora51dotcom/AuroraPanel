@@ -44,6 +44,14 @@
     toastTimer = setTimeout(() => { t.hidden = true; }, 3200);
   }
 
+  window.addEventListener("aurora-updated", () => {
+    if (document.querySelector(".update-banner")) return;
+    document.body.append(el("div", { class: "update-banner", role: "status" }, [
+      el("span", { text: "AuroraPanel was updated — reload to use the new version." }),
+      el("button", { class: "btn btn-sm btn-primary", text: "Reload", onclick: () => location.reload() }),
+    ]));
+  });
+
   // ======================================================================
   //  SVG line icons (Lucide-style)
   // ======================================================================
@@ -481,7 +489,7 @@
     ssh: "SSH Access", ipblocker: "IP Blocker & Trust", ssl: "SSL/TLS Certificates", tokens: "Manage API Tokens",
     hotlink: "Hotlink Protection", redirects: "Redirects", modsec: "ModSecurity", leech: "Fail2ban",
     fixperms: "Fix Home Permissions", vhosts: "Domains", dyndns: "Dynamic DNS", zones: "Zone Editor",
-    mysql: "Manage Databases", mysqlwiz: "Database Wizard", pgsql: "PostgreSQL Databases",
+    mysql: "Manage Databases", mysqlwiz: "MariaDB Wizard", pgsql: "PostgreSQL Databases",
     pgwiz: "PostgreSQL Wizard",
     sysapps: "System Applications", appmgr: "Application Manager", phpver: "PHP Settings",
     password: "Password & Security", accountprefs: "Account Preferences",
@@ -616,7 +624,7 @@
     { name: "Databases", icon: "database", tiles: [
       { label: "phpMyAdmin", icon: "database", ext: "/phpmyadmin" },
       { label: "Manage Databases", icon: "database", view: "mysql" },
-      { label: "Database Wizard", icon: "wizard", view: "mysqlwiz" },
+      { label: "MariaDB Wizard", icon: "wizard", view: "mysqlwiz" },
       { label: "PostgreSQL Databases", icon: "database", view: "pgsql" },
       { label: "PostgreSQL Wizard", icon: "wizard", view: "pgwiz" },
       { label: "phpPgAdmin", icon: "database", ext: "/phppgadmin" },
@@ -5194,90 +5202,298 @@
     subTabs(root, [["mysql", "MariaDB / MySQL"], ["pgsql", "PostgreSQL"]], (tab, pane) => tab === "pgsql" ? pgManager(pane) : mysqlManager(pane));
   }
 
+  // Shared bits of the MariaDB and PostgreSQL pages.
+  const dbChk = (label, checked, hint) => {
+    const c = el("input", { type: "checkbox" }); c.checked = !!checked;
+    return { input: c, node: el("label", { class: "dm-check" }, [c, el("span", {}, [label, hint ? el("span", { class: "muted", text: ` — ${hint}` }) : null].filter(Boolean))]) };
+  };
+  const dbPwField = () => {
+    const inp = el("input", { type: "text", placeholder: "password (6+ characters)", autocomplete: "new-password", spellcheck: "false", style: "min-width:0;flex:1" });
+    return { input: inp, node: el("div", { class: "toolbar", style: "margin:0;flex-wrap:nowrap" }, [inp,
+      btn("Generate", () => { inp.value = genPassword(18); }, "btn-ghost"),
+      btn("Copy", async () => { if (!inp.value) return toast("Nothing to copy yet", "bad"); toast(await copyText(inp.value) ? "Password copied" : "Copy failed", "good"); }, "btn-ghost")]) };
+  };
+  const MY_HOSTS = [["localhost", "This Pi only (localhost)"], ["%", "Any computer (%)"]];
+  const myHostLabel = (h) => h === "localhost" ? "this Pi only" : h === "%" ? "any computer" : h;
+  const myHostSelect = () => el("select", {}, MY_HOSTS.map(([v, t]) => el("option", { value: v, text: t })));
+  const MY_HOST_HINT = "Apps on this Pi use localhost. “Any computer” also needs MariaDB to listen on the network (System Applications → MariaDB → configure).";
+
+  // ---- Manage Databases → MariaDB / MySQL ----
   function mysqlManager(root) {
-    const form = el("div", { class: "card", style: "margin-bottom:16px" }, [
-      el("h3", { text: "Create database" }),
-      el("div", { class: "toolbar" }, [
-        el("input", { id: "my-db", type: "text", placeholder: "database name", style: "max-width:240px" }),
-        el("button", { class: "btn btn-sm btn-primary", text: "Create", onclick: create }),
-      ]),
-    ]);
-    const body = el("div", { id: "my-body" }, el("div", { class: "loading", text: "Loading…" }));
-    root.append(form, body);
+    const body = el("div", {}, el("div", { class: "loading", text: "Loading…" }));
+    root.append(body);
+    const jp = jobPanel(root);
+    state.cleanups.push(jp.stop);
+    // Every action reloads afterwards — also on failure, so a server that went away shows the install/start card.
+    const call = async (fn, okMsg) => {
+      try { const r = await fn(); if (okMsg) toast(okMsg, "good"); load(); return r || true; }
+      catch (e) { toast(e.message, "bad"); load(); return null; }
+    };
+    const manageable = (u) => !u.system && !u.app;
+
+    function phpMyAdminCard(p) {
+      let status, actions;
+      if (!p.installed) {
+        status = pill("not installed", "dim");
+        actions = [btn("Install phpMyAdmin", async () => {
+          const r = await call(() => API.phpmyadminInstall());
+          if (r && r.job) watchJob(jp, r.job, "Installing phpMyAdmin…", load);
+        }, "btn-primary")];
+      } else if (!p.apache) {
+        status = pill("Apache stopped", "warn");
+        actions = [btn("Open System Applications", () => navigate("sysapps"), "btn-primary")];
+      } else {
+        status = pill("ready", "good");
+        actions = [el("a", { class: "btn btn-sm btn-primary", href: p.path, target: "_blank", rel: "noopener noreferrer", text: "Open phpMyAdmin ↗" })];
+      }
+      return el("div", { class: "card", style: "margin-bottom:16px" }, [
+        el("div", { class: "net-card-h" }, [icon("database", 20), el("h3", { text: "phpMyAdmin" }), el("span", { style: "flex:1" }), status]),
+        el("p", { class: "muted", style: "margin:6px 0 10px", text: p.installed
+          ? "Web tool for browsing tables and running SQL. Log in with a user below that has a password — root has none (it only works from the Pi's own terminal). Tick “Admin” on a user for full access to every database."
+          : "Optional web tool for browsing tables and running SQL. Needs Apache; it's added at /phpmyadmin." }),
+        p.installed && !p.apache ? el("p", { class: "dm-hint", text: "Apache isn't running — start it in System Applications to use phpMyAdmin." }) : null,
+        el("div", { class: "toolbar", style: "margin:0" }, actions),
+      ]);
+    }
+
+    function createCards(d) {
+      const dbName = el("input", { type: "text", placeholder: "myapp", style: "min-width:0" });
+      const dbCard = el("div", { class: "card db-form" }, [
+        el("h3", { text: "Create database" }),
+        field("Name", dbName, "Letters, digits and underscore. Created with utf8mb4 (full Unicode, emoji included)."),
+        btn("Create database", async () => {
+          const name = dbName.value.trim(); if (!name) return toast("Enter a database name", "bad");
+          if (await call(() => API.mysqlCreate(name), `Database ${name} created`)) dbName.value = "";
+        }, "btn-primary"),
+      ]);
+      const uName = el("input", { type: "text", placeholder: "myapp_user", autocomplete: "off", style: "min-width:0" });
+      const uHost = myHostSelect();
+      const uPw = dbPwField();
+      const uDb = el("select", {}, [el("option", { value: "", text: "— none —" }),
+        ...d.databases.filter((x) => !x.system && !x.app).map((x) => el("option", { value: x.name, text: x.name }))]);
+      const uAdmin = dbChk("Admin", false, "every privilege on every database; use for phpMyAdmin");
+      const userCard = el("div", { class: "card db-form" }, [
+        el("h3", { text: "Create user" }),
+        field("Username", uName),
+        field("Allow connections from", uHost, MY_HOST_HINT),
+        field("Password", uPw.node, "Save it somewhere — it can be changed later but not shown again."),
+        field("Give full access to", uDb, "Optional — you can grant access to more databases later."),
+        el("div", { style: "margin:4px 0 12px" }, uAdmin.node),
+        btn("Create user", async () => {
+          const user = uName.value.trim(); if (!user) return toast("Enter a username", "bad");
+          if (await call(() => API.mysqlUserCreate({ user, host: uHost.value, password: uPw.input.value, db: uDb.value, admin: uAdmin.input.checked }),
+            `User ${user} created${uDb.value ? ` with access to ${uDb.value}` : ""}`)) { uName.value = ""; uPw.input.value = ""; }
+        }, "btn-primary"),
+      ]);
+      return el("div", { class: "db-grid" }, [dbCard, userCard]);
+    }
+
+    function manageDb(db, d) {
+      const users = d.users.filter(manageable);
+      const list = el("div", { style: "display:flex;flex-direction:column;gap:6px" }, users.length ? users.map((u) => {
+        const c = dbChk(`${u.user}@${u.host}`, db.access.includes(u.account) || u.admin, u.admin ? "admin — always has access" : "");
+        if (u.admin) c.input.disabled = true;
+        c.input.onchange = async () => {
+          c.input.disabled = true;
+          try { await API.mysqlGrant(db.name, u.user, u.host, c.input.checked); toast(`${u.user}: access ${c.input.checked ? "granted" : "removed"}`, "good"); }
+          catch (e) { c.input.checked = !c.input.checked; toast(e.message, "bad"); }
+          c.input.disabled = false; load();
+        };
+        return c.node;
+      }) : [el("p", { class: "muted", text: "No users yet — create one first." })]);
+      openModal(`Database ${db.name}`, el("div", { style: "display:flex;flex-direction:column;gap:14px;min-width:min(520px,80vw)" }, [
+        kv([["Size", db.size], ["Tables", String(db.tables)], ["Character set", db.charset]]),
+        el("div", {}, [el("h4", { text: "Users with full access", style: "margin:0 0 6px" }), list,
+          el("p", { class: "dm-hint", text: "Full access = every privilege on this database: read, write, and create or change tables." })]),
+        el("div", {}, [el("h4", { text: "Connect from an app", style: "margin:0 0 6px" }),
+          el("pre", { class: "log", style: "margin:0;white-space:pre-wrap", text:
+            `mysql://<user>:<password>@localhost:3306/${db.name}\n\nmysql -u <user> -p ${db.name}` })]),
+      ]), []);
+    }
+
+    function editUser(u, d) {
+      const admin = dbChk("Admin", u.admin, "every privilege on every database");
+      const dbs = d.databases.filter((x) => !x.system && !x.app).map((x) => ({ name: x.name, c: dbChk(x.name, u.databases.includes(x.name)) }));
+      const syncDisabled = () => dbs.forEach(({ c }) => { c.input.disabled = admin.input.checked; });
+      admin.input.onchange = syncDisabled; syncDisabled();
+      openModal(`User ${u.user}@${u.host}`, el("div", { style: "display:flex;flex-direction:column;gap:10px;min-width:min(440px,80vw)" }, [
+        kv([["Connects from", myHostLabel(u.host)], ["Password", u.has_password ? "set" : "none"]]),
+        admin.node,
+        el("h4", { text: "Full access to", style: "margin:6px 0 0" }),
+        dbs.length ? el("div", { style: "display:flex;flex-direction:column;gap:6px" }, dbs.map((x) => x.c.node)) : el("p", { class: "muted", text: "No databases yet." }),
+        el("p", { class: "dm-hint", text: "An admin already has access to everything, so the list is locked while Admin is ticked." }),
+      ]), [btn("Save", async () => {
+        try {
+          if (admin.input.checked !== u.admin) await API.mysqlUserAdmin(u.user, u.host, admin.input.checked);
+          for (const x of dbs) {
+            const want = x.c.input.checked, had = u.databases.includes(x.name);
+            if (!admin.input.checked && want !== had) await API.mysqlGrant(x.name, u.user, u.host, want);
+          }
+          toast(`${u.user} updated`, "good"); closeModal();
+        } catch (e) { toast(e.message, "bad"); }
+        load();
+      }, "btn-primary")]);
+    }
+
+    function setPassword(u) {
+      const pw = dbPwField();
+      openModal(`Password for ${u.user}@${u.host}`, el("div", { style: "min-width:min(420px,80vw)" }, [field("New password", pw.node, "Apps using the old password will need the new one.")]),
+        [btn("Set password", async () => {
+          if (await call(() => API.mysqlUserPassword(u.user, u.host, pw.input.value), `Password changed for ${u.user}`)) closeModal();
+        }, "btn-primary")]);
+    }
+
+    function render(d) {
+      body.innerHTML = "";
+      body.append(phpMyAdminCard(d.phpmyadmin), createCards(d));
+      const tag = (x) => x.system ? el("span", { class: "pill dim", style: "margin-left:6px", text: "system" })
+        : x.app ? el("span", { class: "pill dim", style: "margin-left:6px", text: x.app }) : null;
+      const dbRows = d.databases.map((db) => el("tr", {}, [
+        el("td", {}, [el("b", { text: db.name }), tag(db)].filter(Boolean)),
+        el("td", { class: "muted", text: db.size }), el("td", { class: "muted", text: String(db.tables) }),
+        el("td", {}, db.access.length ? db.access.map((a) => el("span", { class: "pill", style: "margin:0 4px 2px 0", text: a })) : el("span", { class: "muted", text: db.system || db.app ? "" : "admins only" })),
+        el("td", { class: "actions" }, db.system || db.app ? "" : [
+          btn("Manage", () => manageDb(db, d)),
+          el("button", { class: "btn btn-sm btn-danger", text: "Drop", onclick: () => {
+            if (!confirmInline(`Drop database "${db.name}"? All its data is deleted. This can't be undone.`)) return;
+            call(() => API.mysqlDrop(db.name), `Dropped ${db.name}`); } })]),
+      ]));
+      body.append(el("div", { class: "card", style: "margin-bottom:16px" }, [el("h3", { text: "Databases" }),
+        simpleTable(["Database", "Size", "Tables", "Users with access", ""], dbRows)]));
+      const userRows = d.users.map((u) => el("tr", {}, [
+        el("td", {}, [el("b", { text: u.user }), u.system ? el("span", { class: "pill dim", style: "margin-left:6px", text: "built-in" }) : u.app ? el("span", { class: "pill dim", style: "margin-left:6px", text: u.app }) : null].filter(Boolean)),
+        el("td", { class: "muted", text: myHostLabel(u.host) }),
+        el("td", {}, u.admin ? pill("admin", "warn") : u.databases.length ? u.databases.map((x) => el("span", { class: "pill", style: "margin:0 4px 2px 0", text: x })) : el("span", { class: "muted", text: "no databases" })),
+        el("td", {}, u.has_password ? pill("set", "good") : el("span", { class: "muted", text: u.system ? "none (local only)" : "none" })),
+        el("td", { class: "actions" }, manageable(u) ? [
+          btn("Password", () => setPassword(u)), btn("Edit", () => editUser(u, d)),
+          el("button", { class: "btn btn-sm btn-danger", text: "Delete", onclick: () => {
+            if (!confirmInline(`Delete user "${u.user}@${u.host}"? Apps logging in with it will stop working. Databases are kept.`)) return;
+            call(() => API.mysqlUserDrop(u.user, u.host), `Deleted ${u.user}`); } })] : ""),
+      ]));
+      body.append(el("div", { class: "card" }, [el("h3", { text: "Users" }),
+        el("p", { class: "muted", style: "margin:0 0 10px", text: "Apps and phpMyAdmin log in with a user that has a password. Built-in accounts are managed by the system and can't be changed here." }),
+        simpleTable(["User", "Connects from", "Access", "Password", ""], userRows)]));
+    }
+
     const load = async () => {
       await guardedLoad(async () => {
         let d;
         try { d = await API.mysql(); }
         catch (e) { body.innerHTML = ""; body.append(el("p", { class: "empty", text: e.message })); return; }
-        body.innerHTML = "";
-        const dbRows = d.databases.map((db) => el("tr", {}, [
-          el("td", { text: db.name }), el("td", {}, db.system ? el("span", { class: "pill dim", text: "system" }) : ""),
-          el("td", { class: "actions" }, db.system ? "" : el("button", { class: "btn btn-sm btn-danger", text: "Drop", onclick: async () => {
-            if (!confirmInline(`Drop database "${db.name}"? This deletes all its data.`)) return;
-            try { await API.mysqlDrop(db.name); toast("Dropped", "good"); load(); } catch (e) { toast(e.message, "bad"); } } })),
-        ]));
-        body.append(el("div", { class: "card", style: "margin-bottom:16px" }, [el("h3", { text: "MariaDB / MySQL databases" }), simpleTable(["Database", "", ""], dbRows)]));
-        const uRows = d.users.map((u) => el("tr", {}, [el("td", { text: u.user }), el("td", { class: "muted", text: u.host })]));
-        body.append(el("div", { class: "card" }, [el("h3", { text: "Users" }), simpleTable(["User", "Host"], uRows)]));
+        if (!dbOffer("mariadb", d, body, jp, load)) return;
+        render(d);
       });
     };
-    async function create() {
-      const name = $("#my-db").value.trim(); if (!name) return;
-      try { await API.mysqlCreate(name); toast("Database created", "good"); $("#my-db").value = ""; load(); }
-      catch (e) { toast(e.message, "bad"); }
-    }
     state.refreshHandler = load; load();
   }
 
-  // ---- MySQL Database Wizard ----
-  function viewMySQLWizard(root) {
-    root.append(el("div", { class: "card" }, [
-      el("h3", { text: "MySQL Database Wizard" }),
-      el("p", { class: "muted", style: "margin:0 0 14px", text: "Creates a database + user and grants the user full access to it." }),
-      el("div", { style: "display:flex;flex-direction:column;gap:12px;max-width:420px" }, [
-        labeledInput("wz-db", "Database name", "myapp"),
-        labeledInput("wz-user", "Username", "myapp_user"),
-        labeledInput("wz-host", "Host", "localhost", "localhost"),
-        labeledInput("wz-pw", "Password", "strong password", "", "password"),
-        el("button", { class: "btn btn-primary", style: "align-self:flex-start", text: "Create", onclick: async () => {
-          try { const r = await API.mysqlWizard({ db: $("#wz-db").value.trim(), user: $("#wz-user").value.trim(), host: $("#wz-host").value.trim() || "localhost", password: $("#wz-pw").value });
-            toast(`Created ${r.database} + ${r.user}`, "good"); $("#wz-db").value = $("#wz-user").value = $("#wz-pw").value = ""; }
-          catch (e) { toast(e.message, "bad"); } } }),
-      ]),
-    ]));
+  // ---- Database wizards (MariaDB and PostgreSQL share the layout) ----
+  // spec: { app, title, intro, userLabel, fetch, create(vals), result(r, vals) → [[k, v]…], conn(vals) → text, host }
+  function dbWizard(root, spec) {
+    const gate = el("div", {});
+    const jp = jobPanel(root);
+    state.cleanups.push(jp.stop);
+    const name = el("input", { type: "text", placeholder: "myapp", autocomplete: "off", style: "min-width:0" });
+    const user = el("input", { type: "text", placeholder: "myapp_user", autocomplete: "off", style: "min-width:0" });
+    const host = spec.host ? myHostSelect() : null;
+    const pw = dbPwField();
+    const out = el("div", {});
+    const createBtn = btn("Create database and user", async () => {
+      const vals = { db: name.value.trim(), user: user.value.trim(), host: host ? host.value : "localhost", password: pw.input.value };
+      if (!vals.db) return toast("Enter a database name", "bad");
+      if (!vals.user) return toast(`Enter a ${spec.userLabel.toLowerCase()}`, "bad");
+      createBtn.disabled = true;
+      try { const r = await spec.create(vals); showResult(r, vals); }
+      catch (e) { toast(e.message, "bad"); check(); }
+      createBtn.disabled = false;
+    }, "btn-primary");
+    const form = el("div", { class: "db-form", style: "max-width:520px" }, [
+      field("Database name", name, "Letters, digits and underscore."),
+      field(spec.userLabel, user, spec.userHint),
+      host ? field("Allow connections from", host, MY_HOST_HINT) : null,
+      field("Password", pw.node, "Click Generate for a strong one, and save it — it can't be shown again later."),
+      el("div", {}, createBtn),
+    ].filter(Boolean));
+    const wiz = el("div", { class: "card", hidden: true }, [
+      el("h3", { text: spec.title }),
+      el("p", { class: "muted", style: "margin:0 0 14px", text: spec.intro }), form, out,
+    ]);
+    function showResult(r, vals) {
+      out.innerHTML = "";
+      form.hidden = true;
+      out.append(
+        el("div", { class: "net-card-h", style: "margin-bottom:10px" }, [pill("created", "good"), el("span", { class: "muted", text: "Save these details now — the password isn't stored anywhere you can see it again." })]),
+        kv([...spec.result(r, vals), ["Password", vals.password]]),
+        el("h4", { text: "Connect from an app", style: "margin:14px 0 6px" }),
+        el("pre", { class: "log", style: "margin:0 0 14px;white-space:pre-wrap", text: spec.conn(vals) }),
+        el("div", { class: "toolbar", style: "margin:0" }, [
+          btn("Copy password", async () => toast(await copyText(vals.password) ? "Password copied" : "Copy failed", "good"), "btn-primary"),
+          btn("Create another", () => { out.innerHTML = ""; form.hidden = false; name.value = user.value = pw.input.value = ""; name.focus(); }),
+          btn("Manage databases", () => navigate(spec.manage), "btn-ghost"),
+        ]));
+    }
+    const check = async () => {
+      try { const d = await spec.fetch(); wiz.hidden = !dbOffer(spec.app, d, gate, jp, check); if (!wiz.hidden) gate.innerHTML = ""; }
+      catch (e) { gate.innerHTML = ""; wiz.hidden = false; }  // errors surface on Create
+    };
+    root.prepend(gate, wiz);
+    state.refreshHandler = check; check();
   }
 
-  // ---- PostgreSQL Databases ----
-  // PostgreSQL missing or stopped → offer to install / start it (same System Applications
-  // endpoints). Returns true when the server is ready; otherwise renders the offer into box.
-  function pgOffer(d, box, jp, reload) {
+  function viewMySQLWizard(root) {
+    dbWizard(root, {
+      app: "mariadb", title: "MariaDB Database Wizard", manage: "mysql", host: true,
+      intro: "Creates a new database and a new user in one step, and gives that user full access to the database — what most apps (WordPress, Nextcloud, …) ask for.",
+      userLabel: "Username", userHint: "The account your app logs in with.",
+      fetch: () => API.mysql(),
+      create: (v) => API.mysqlWizard({ db: v.db, user: v.user, host: v.host, password: v.password }),
+      result: (r, v) => [["Database", v.db], ["User", r.user], ["Connects from", myHostLabel(v.host)]],
+      conn: (v) => `mysql://${v.user}:<password>@localhost:3306/${v.db}\n\nmysql -u ${v.user} -p ${v.db}`,
+    });
+  }
+
+  // ---- Database server missing / stopped / half-installed → offer to install, start or
+  // repair it (same System Applications endpoints). Returns true when the server is ready;
+  // otherwise renders the offer into box.
+  const DB_SERVERS = {
+    postgresql: { name: "PostgreSQL", size: "about 50 MB download; uses ~30–60 MB RAM while running",
+      stopped: "The PostgreSQL server is installed but no database cluster is online. Start it to manage databases here." },
+    mariadb: { name: "MariaDB", size: "about 40 MB download; uses ~80–150 MB RAM while running",
+      stopped: "The MariaDB server is installed but not running. Start it to manage databases here." },
+  };
+  function dbOffer(app, d, box, jp, reload) {
     if (d.installed && d.running) return true;
+    const s = DB_SERVERS[app];
     box.innerHTML = "";
-    const act = !d.installed
-      ? el("button", { class: "btn btn-primary", text: "Install PostgreSQL", onclick: async (e) => {
-          e.currentTarget.disabled = true;
+    const install = !d.installed;
+    const act = install
+      ? el("button", { class: "btn btn-primary", text: d.broken ? `Repair ${s.name}` : `Install ${s.name}`, onclick: async (e) => {
+          const b = e.currentTarget; b.disabled = true;
           try {
-            const r = await API.sysappInstall("postgresql");
-            await jp.run(r.job, "Installing PostgreSQL…");
+            const r = await API.sysappInstall(app);
+            await jp.run(r.job, d.broken ? `Repairing ${s.name}…` : `Installing ${s.name}…`);
             const t = setInterval(async () => {
               try { const j = await API.job(r.job); if (j.status !== "running") { clearInterval(t); reload(); } }
               catch (err) { clearInterval(t); }
             }, 2000);
             state.cleanups.push(() => clearInterval(t));
-          } catch (err) { e.target.disabled = false; toast(err.message, "bad"); } } })
-      : el("button", { class: "btn btn-primary", text: "Start PostgreSQL", onclick: async () => {
-          try { await API.sysappControl("postgresql", "start"); toast("PostgreSQL started", "good"); reload(); }
+          } catch (err) { b.disabled = false; toast(err.message, "bad"); } } })
+      : el("button", { class: "btn btn-primary", text: `Start ${s.name}`, onclick: async () => {
+          try { await API.sysappControl(app, "start"); toast(`${s.name} started`, "good"); reload(); }
           catch (err) { toast(err.message, "bad"); } } });
     box.append(el("div", { class: "card" }, [
-      el("h3", { text: d.installed ? "PostgreSQL isn't running" : "PostgreSQL isn't installed" }),
-      el("p", { class: "muted", style: "margin:0 0 14px", text: d.installed
-        ? "The PostgreSQL server is installed but no database cluster is online. Start it to manage databases here."
-        : "PostgreSQL isn't on this system yet. Install it now (about 50 MB download; uses ~30–60 MB RAM while running), or manage it later from System Applications → Extras." }),
+      el("h3", { text: d.broken ? `${s.name}'s installation didn't finish` : install ? `${s.name} isn't installed` : `${s.name} isn't running` }),
+      el("p", { class: "muted", style: "margin:0 0 14px", text: d.broken
+        ? `${s.name} was only partly installed (its setup stopped part-way), so the server can't run. Repair finishes the installation; existing databases are kept.`
+        : install ? `${s.name} isn't on this system yet. Install it now (${s.size}), or manage it later from System Applications → Extras.` : s.stopped }),
       el("div", { class: "toolbar" }, [act, btn("Open System Applications", () => navigate("sysapps"), "btn-ghost")]),
     ]));
     return false;
   }
+  const pgOffer = (d, box, jp, reload) => dbOffer("postgresql", d, box, jp, reload);
 
+  // ---- PostgreSQL Databases ----
   function viewPgSQL(root) { pgManager(root); }
 
   // Full PostgreSQL management: databases (owner, size, access), users/roles (password,
@@ -5298,8 +5514,8 @@
         btn("Copy", async () => toast(await copyText(inp.value) ? "Password copied" : "Copy failed", "good"), "btn-ghost")]) };
     };
     const call = async (fn, okMsg) => {
-      try { const r = await fn(); if (okMsg) toast(okMsg, "good"); load(); return r; }
-      catch (e) { toast(e.message, "bad"); return null; }
+      try { const r = await fn(); if (okMsg) toast(okMsg, "good"); load(); return r || true; }
+      catch (e) { toast(e.message, "bad"); load(); return null; }
     };
 
     function permissionError(e) {
@@ -5347,7 +5563,7 @@
       const dbName = el("input", { type: "text", placeholder: "myapp", style: "min-width:0" });
       const dbOwner = el("select", {}, [el("option", { value: "", text: "postgres (default)" }),
         ...owners.filter((r) => !r.system).map((r) => el("option", { value: r.name, text: r.name }))]);
-      const dbCard = el("div", { class: "card" }, [
+      const dbCard = el("div", { class: "card db-form" }, [
         el("h3", { text: "Create database" }),
         field("Name", dbName, "Letters, digits and underscore."),
         field("Owner", dbOwner, "The owner has full control. Pick the user your app logs in with."),
@@ -5361,7 +5577,7 @@
       const cdb = chk("Can create databases"), csu = chk("Superuser", false, "full admin; use for phpPgAdmin");
       const uDb = el("select", {}, [el("option", { value: "", text: "— none —" }),
         ...d.databases.filter((x) => !x.system).map((x) => el("option", { value: x.name, text: x.name }))]);
-      const userCard = el("div", { class: "card" }, [
+      const userCard = el("div", { class: "card db-form" }, [
         el("h3", { text: "Create user" }),
         field("Username", uName),
         field("Password", uPw.node, "Save it somewhere — it can be changed later but not shown again."),
@@ -5377,7 +5593,7 @@
           } catch (e) { toast(e.message, "bad"); load(); }
         }, "btn-primary"),
       ]);
-      return el("div", { style: "display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px;margin-bottom:16px" }, [dbCard, userCard]);
+      return el("div", { class: "db-grid" }, [dbCard, userCard]);
     }
 
     function manageDb(db, d) {
@@ -5480,29 +5696,15 @@
 
   // ---- PostgreSQL Wizard ----
   function viewPgWizard(root) {
-    const gate = el("div", {});
-    const jp = jobPanel(root);
-    root.prepend(gate);
-    state.cleanups.push(jp.stop);
-    const check = async () => {
-      try { const d = await API.pg(); wiz.hidden = !pgOffer(d, gate, jp, check); if (!wiz.hidden) gate.innerHTML = ""; }
-      catch (e) { gate.innerHTML = ""; wiz.hidden = false; }  // a broken server still shows the wizard; its errors surface on Create
-    };
-    const wiz = el("div", { class: "card", hidden: true }, [
-      el("h3", { text: "PostgreSQL Database Wizard" }),
-      el("p", { class: "muted", style: "margin:0 0 14px", text: "Creates a login role + a database owned by that role." }),
-      el("div", { style: "display:flex;flex-direction:column;gap:12px;max-width:420px" }, [
-        labeledInput("pw-db", "Database name", "myapp"),
-        labeledInput("pw-role", "Role (username)", "myapp_user"),
-        labeledInput("pw-pw", "Password", "strong password", "", "password"),
-        el("button", { class: "btn btn-primary", style: "align-self:flex-start", text: "Create", onclick: async () => {
-          try { const r = await API.pgWizard({ db: $("#pw-db").value.trim(), role: $("#pw-role").value.trim(), password: $("#pw-pw").value });
-            toast(`Created ${r.database} owned by ${r.role}`, "good"); $("#pw-db").value = $("#pw-role").value = $("#pw-pw").value = ""; }
-          catch (e) { toast(e.message, "bad"); } } }),
-      ]),
-    ]);
-    root.insertBefore(wiz, gate.nextSibling);
-    check();
+    dbWizard(root, {
+      app: "postgresql", title: "PostgreSQL Database Wizard", manage: "pgsql", host: false,
+      intro: "Creates a new database and a new user in one step, and makes that user the database's owner — what most apps (Django, Rails, Nextcloud, …) ask for.",
+      userLabel: "Username", userHint: "The account your app logs in with (PostgreSQL calls it a role).",
+      fetch: () => API.pg(),
+      create: (v) => API.pgWizard({ db: v.db, role: v.user, password: v.password }),
+      result: (r, v) => [["Database", v.db], ["User (owner)", r.role]],
+      conn: (v) => `postgresql://${v.user}:<password>@localhost:5432/${v.db}\n\npsql -h ${location.hostname} -U ${v.user} -d ${v.db}`,
+    });
   }
 
   function labeledInput(id, label, placeholder, value, type) {
@@ -5601,7 +5803,7 @@
     }
     async function doInstall(a) {
       const r = await withSwitch((sw) => API.sysappInstall(a.id, sw));
-      if (r) watch(r.job, `Installing ${a.name}…`);
+      if (r) watch(r.job, `${a.broken ? "Repairing" : "Installing"} ${a.name}…`);
     }
     async function doUninstall(a) {
       const extra = a.id === "apache" ? "\n\nphpMyAdmin and your Apache sites will stop being served." : (a.id === "mariadb" || a.id === "postgresql") ? "\n\nDatabases stay on disk but nothing can use them until it is reinstalled." : "";
@@ -5615,7 +5817,8 @@
     }
 
     function card(a) {
-      const pill = !a.installed ? el("span", { class: "pill dim", text: "Not installed" })
+      const pill = a.broken ? el("span", { class: "pill bad", text: "Install incomplete" })
+        : !a.installed ? el("span", { class: "pill dim", text: "Not installed" })
         : el("span", { class: `pill ${a.active ? "good" : "dim"}`, text: a.active ? "Running" : "Stopped" });
       const facts = [
         a.version ? `Version <b>${esc(a.version)}</b>` : null,
@@ -5623,7 +5826,7 @@
         a.docroot ? `Web folder <code>${esc(a.docroot)}</code>` : null,
       ].filter(Boolean).join(" · ");
       const btns = !a.installed
-        ? [el("button", { class: "btn btn-sm btn-primary", text: "Install", onclick: () => doInstall(a) })]
+        ? [el("button", { class: "btn btn-sm btn-primary", text: a.broken ? "Repair" : "Install", title: a.broken ? "The last install stopped part-way — finish it" : "", onclick: () => doInstall(a) })]
         : [
             a.active ? el("button", { class: "btn btn-sm", text: "Restart", onclick: () => doCtl(a, "restart") })
                      : el("button", { class: "btn btn-sm btn-primary", text: "Start", onclick: () => doCtl(a, "start") }),
