@@ -1,0 +1,369 @@
+/* Thin fetch wrapper around the AuroraPanel API. */
+const API = (() => {
+  async function request(method, path, body, isForm) {
+    const opts = { method, credentials: "same-origin", headers: {} };
+    if (body !== undefined) {
+      if (isForm) {
+        opts.body = body; // FormData — let the browser set the boundary.
+      } else {
+        opts.headers["Content-Type"] = "application/json";
+        opts.body = JSON.stringify(body);
+      }
+    }
+    const res = await fetch(path, opts);
+    if (res.status === 401) {
+      const err = new Error("Not authenticated");
+      err.status = 401;
+      throw err;
+    }
+    let data = null;
+    const ct = res.headers.get("content-type") || "";
+    if (ct.includes("application/json")) data = await res.json();
+    if (!res.ok) {
+      const err = new Error((data && data.detail) || res.statusText || "Request failed");
+      err.status = res.status;
+      throw err;
+    }
+    return data;
+  }
+
+  return {
+    get: (p) => request("GET", p),
+    post: (p, b) => request("POST", p, b),
+    postForm: (p, form) => request("POST", p, form, true),
+
+    // convenience endpoints
+    status: () => request("GET", "/api/status"),
+    setup: (username, password) => request("POST", "/api/setup", { username, password }),
+    login: (username, password) => request("POST", "/api/login", { username, password }),
+    logout: () => request("POST", "/api/logout"),
+    me: () => request("GET", "/api/me"),
+
+    overview: () => request("GET", "/api/system/overview"),
+    disks: () => request("GET", "/api/system/disks"),
+    network: () => request("GET", "/api/system/network"),
+    processes: (sort) => request("GET", `/api/system/processes?sort_by=${sort}&limit=50`),
+    killProcess: (pid) => request("POST", `/api/system/processes/${pid}/kill`),
+
+    services: () => request("GET", "/api/services"),
+    serviceControl: (unit, action) => request("POST", "/api/services/control", { unit, action }),
+    serviceStatus: (unit) => request("GET", `/api/services/status?unit=${encodeURIComponent(unit)}`),
+
+    filesList: (path) => request("GET", `/api/files/list?path=${encodeURIComponent(path)}`),
+    filesRead: (path) => request("GET", `/api/files/read?path=${encodeURIComponent(path)}`),
+    filesWrite: (path, content) => request("POST", "/api/files/write", { path, content }),
+    filesDelete: (path, permanent) => request("POST", "/api/files/delete", { path, permanent: !!permanent }),
+    filesMkdir: (path, name) => request("POST", "/api/files/mkdir", { path, name }),
+    downloadUrl: (path) => `/api/files/download?path=${encodeURIComponent(path)}`,
+    filesZip: (path, names, archive_name, overwrite) => request("POST", "/api/files/zip", { path, names, archive_name, overwrite: !!overwrite }),
+    filesUnzip: (path, overwrite) => request("POST", "/api/files/unzip", { path, overwrite: !!overwrite }),
+    trashList: () => request("GET", "/api/files/trash"),
+    trashRestore: (id, overwrite) => request("POST", "/api/files/trash/restore", { id, overwrite: !!overwrite }),
+    trashDelete: (id) => request("POST", "/api/files/trash/delete", { id }),
+    trashEmpty: () => request("POST", "/api/files/trash/empty"),
+
+    // jobs
+    job: (id) => request("GET", `/api/jobs/${id}`),
+
+    // packages
+    pkgInstalled: () => request("GET", "/api/packages/installed"),
+    pkgUpgradable: () => request("GET", "/api/packages/upgradable"),
+    pkgSearch: (q) => request("GET", `/api/packages/search?q=${encodeURIComponent(q)}`),
+    pkgUpdate: () => request("POST", "/api/packages/update"),
+    pkgUpgrade: () => request("POST", "/api/packages/upgrade"),
+    pkgInstall: (packages) => request("POST", "/api/packages/install", { packages }),
+    pkgRemove: (packages) => request("POST", "/api/packages/remove", { packages }),
+
+    // cron
+    cronList: () => request("GET", "/api/cron"),
+    cronAdd: (schedule, command, label) => request("POST", "/api/cron/add", { schedule, command, label }),
+    cronUpdate: (b) => request("POST", "/api/cron/update", b),
+    cronPause: (raw, paused) => request("POST", "/api/cron/pause", { raw, paused }),
+    cronRun: (raw) => request("POST", "/api/cron/run", { raw }),
+    cronDelete: (raw) => request("POST", "/api/cron/delete", { raw }),
+
+    // users
+    usersList: (sys) => request("GET", `/api/users?include_system=${sys ? "true" : "false"}`),
+    userAdd: (b) => request("POST", "/api/users/add", b),
+    userDelete: (name, remove_home) => request("POST", "/api/users/delete", { name, remove_home }),
+    userLock: (name, locked) => request("POST", "/api/users/lock", { name, locked }),
+    userPassword: (name, password) => request("POST", "/api/users/password", { name, password }),
+
+    // firewall
+    firewall: () => request("GET", "/api/firewall"),
+    firewallToggle: (enabled) => request("POST", "/api/firewall/toggle", { enabled }),
+    firewallRule: (action, port, proto) => request("POST", "/api/firewall/rule", { action, port, proto }),
+    firewallDelete: (num) => request("POST", "/api/firewall/delete", { num }),
+
+    // disk usage
+    diskUsage: (path) => request("GET", `/api/diskusage?path=${encodeURIComponent(path)}`),
+
+    // backups
+    backups: () => request("GET", "/api/backups"),
+    backupCreate: (source, label) => request("POST", "/api/backups/create", { source, label }),
+    backupRestore: (name, dest) => request("POST", "/api/backups/restore", { name, dest }),
+    backupDelete: (name) => request("POST", "/api/backups/delete", { name }),
+    backupDownloadUrl: (name) => `/api/backups/download?name=${encodeURIComponent(name)}`,
+    backupWizard: () => request("GET", "/api/backups/wizard"),
+    backupWizardCreate: (body) => request("POST", "/api/backups/wizard", body),
+    backupManifest: (name) => request("GET", `/api/backups/manifest?name=${encodeURIComponent(name)}`),
+    backupWizardRestore: (body) => request("POST", "/api/backups/wizard/restore", body),
+    // Files tools
+    imageInfo: (path) => request("GET", `/api/images/info?path=${encodeURIComponent(path || "")}`),
+    imageScale: (body) => request("POST", "/api/images/scale", body),
+    imageThumbs: (body) => request("POST", "/api/images/thumbnails", body),
+    imageConvert: (body) => request("POST", "/api/images/convert", body),
+    webdisk: () => request("GET", "/api/webdisk"),
+    webdiskCreate: (body) => request("POST", "/api/webdisk", body),
+    webdiskUpdate: (body) => request("POST", "/api/webdisk/update", body),
+    webdiskDelete: (name) => request("POST", "/api/webdisk/delete", { name }),
+    webdiskCert: (host) => request("GET", `/api/webdisk/certificate?host=${encodeURIComponent(host || "")}`),
+    webdiskCertCreate: (host) => request("POST", "/api/webdisk/certificate", { host: host || "" }),
+    dirPrivacy: () => request("GET", "/api/dirprivacy"),
+    dirPrivacyProtect: (body) => request("POST", "/api/dirprivacy/protect", body),
+    dirPrivacyUser: (body) => request("POST", "/api/dirprivacy/user", body),
+    dirPrivacyToggle: (path, enabled) => request("POST", "/api/dirprivacy/toggle", { path, enabled }),
+    dirPrivacyRemove: (path) => request("POST", "/api/dirprivacy/remove", { path }),
+    git: () => request("GET", "/api/git"),
+    gitDetails: (name) => request("GET", `/api/git/${encodeURIComponent(name)}`),
+    gitKey: (name, owner) => request("POST", "/api/git/key", { name, owner }),
+    gitCreate: (body) => request("POST", "/api/git/create", body),
+    gitPull: (name) => request("POST", "/api/git/pull", { name }),
+    gitCheckout: (name, branch) => request("POST", "/api/git/checkout", { name, branch }),
+    gitDeploySettings: (name, deploy_path, deploy_cmd) => request("POST", "/api/git/deploy-settings", { name, deploy_path, deploy_cmd }),
+    gitDeploy: (name) => request("POST", "/api/git/deploy", { name }),
+    gitRemove: (name, delete_files) => request("POST", "/api/git/remove", { name, delete_files }),
+    inodes: (path) => request("GET", `/api/inodes?path=${encodeURIComponent(path || "/")}`),
+
+    // 2fa
+    twofaStatus: () => request("GET", "/api/2fa/status"),
+    twofaEnroll: () => request("POST", "/api/2fa/enroll"),
+    twofaEnable: (code) => request("POST", "/api/2fa/enable", { code }),
+    twofaDisable: (code) => request("POST", "/api/2fa/disable", { code }),
+
+    // ssh access
+    sshStatus: () => request("GET", "/api/ssh/status"),
+    sshRestart: () => request("POST", "/api/ssh/restart"),
+    sshKeys: (target) => request("GET", `/api/ssh/keys?target=${encodeURIComponent(target)}`),
+    sshKeyAdd: (u, public_key) => request("POST", "/api/ssh/keys/add", { user: u, public_key }),
+    sshKeyRemove: (u, raw) => request("POST", "/api/ssh/keys/remove", { user: u, raw }),
+
+    // ip blocker
+    ipblocker: () => request("GET", "/api/ipblocker"),
+    ipBlock: (ip) => request("POST", "/api/ipblocker/block", { ip }),
+    ipUnblock: (num) => request("POST", "/api/ipblocker/unblock", { num }),
+
+    // ssl
+    sslCerts: () => request("GET", "/api/ssl/certs"),
+    sslSelfSigned: (common_name, days) => request("POST", "/api/ssl/selfsigned", { common_name, days }),
+
+    // api tokens
+    tokens: () => request("GET", "/api/tokens"),
+    tokenCreate: (name) => request("POST", "/api/tokens/create", { name }),
+    tokenRevoke: (id) => request("POST", "/api/tokens/revoke", { id }),
+
+    // hotlink + redirects
+    hotlink: (dir) => request("GET", `/api/apache/hotlink?dir=${encodeURIComponent(dir)}`),
+    hotlinkSet: (b) => request("POST", "/api/apache/hotlink", b),
+    redirects: (dir) => request("GET", `/api/apache/redirects?dir=${encodeURIComponent(dir)}`),
+    redirectAdd: (b) => request("POST", "/api/apache/redirects", b),
+
+    // modsecurity
+    modsec: () => request("GET", "/api/modsecurity"),
+    modsecToggle: (enabled) => request("POST", "/api/modsecurity/toggle", { enabled }),
+    modsecInstall: () => request("POST", "/api/modsecurity/install"),
+
+    // fail2ban (leech)
+    fail2ban: () => request("GET", "/api/fail2ban"),
+    fail2banUnban: (jail, ip) => request("POST", "/api/fail2ban/unban", { jail, ip }),
+    fail2banInstall: () => request("POST", "/api/fail2ban/install"),
+    fail2banSave: (global, jails) => request("POST", "/api/fail2ban/save", { global, jails }),
+    fail2banService: (on) => request("POST", "/api/fail2ban/service", { on }),
+    fail2banBan: (jail, ip) => request("POST", "/api/fail2ban/ban", { jail, ip }),
+    fail2banLogs: () => request("GET", "/api/fail2ban/logs"),
+    // bans & trusted addresses
+    guard: () => request("GET", "/api/guard"),
+    guardBan: (target, reason, duration) => request("POST", "/api/guard/ban", { target, reason, duration }),
+    guardUnban: (target) => request("POST", "/api/guard/unban", { target }),
+    guardTrust: (target, reason) => request("POST", "/api/guard/trust", { target, reason }),
+    guardUntrust: (target) => request("POST", "/api/guard/untrust", { target }),
+
+    // fix perms
+    fixPerms: (name) => request("POST", "/api/fixperms", { name }),
+
+    // domains
+    vhosts: () => request("GET", "/api/domains/vhosts"),
+    dyndns: () => request("GET", "/api/domains/dyndns"),
+    dyndnsRun: () => request("POST", "/api/domains/dyndns/run"),
+    dyndnsInstall: () => request("POST", "/api/domains/dyndns/install"),
+
+    // System application configuration + FTP accounts
+    appConfig: (id) => request("GET", `/api/sysapps/${id}/config`),
+    appSettings: (id) => request("GET", `/api/sysapps/${id}/settings`),
+    appSettingsSave: (id, changes) => request("POST", `/api/sysapps/${id}/settings`, { changes }),
+    appModules: (id) => request("GET", `/api/sysapps/${id}/modules`),
+    appModule: (id, name, on) => request("POST", `/api/sysapps/${id}/modules`, { name, on }),
+    appFile: (id, path) => request("GET", `/api/sysapps/${id}/file?path=${encodeURIComponent(path)}`),
+    appFileSave: (id, path, content) => request("POST", `/api/sysapps/${id}/file`, { path, content }),
+    appCfgLogs: (id, source, lines) => request("GET", `/api/sysapps/${id}/logs?lines=${encodeURIComponent(lines || 200)}${source ? "&source=" + encodeURIComponent(source) : ""}`),
+    ftpAccounts: () => request("GET", "/api/ftp/accounts"),
+    ftpCreate: (body) => request("POST", "/api/ftp/accounts", body),
+    ftpPassword: (name, password) => request("POST", "/api/ftp/accounts/password", { name, password }),
+    ftpModify: (body) => request("POST", "/api/ftp/accounts/modify", body),
+    ftpToggle: (name, enabled) => request("POST", "/api/ftp/accounts/toggle", { name, enabled }),
+    ftpDelete: (name) => request("POST", "/api/ftp/accounts/delete", { name }),
+
+    // About & updates
+    about: () => request("GET", "/api/about"),
+    aboutCheck: () => request("POST", "/api/about/check"),
+    aboutChangelog: () => request("POST", "/api/about/changelog"),
+    aboutUpdate: () => request("POST", "/api/about/update"),
+    aboutUpdateStatus: () => request("GET", "/api/about/update"),
+
+    // PHP settings
+    phpOverview: () => request("GET", "/api/php/settings/overview"),
+    phpSettings: (version, sapi) => request("GET", `/api/php/settings?version=${encodeURIComponent(version)}&sapi=${encodeURIComponent(sapi)}`),
+    phpSettingsSave: (version, sapis, changes, reset) => request("POST", "/api/php/settings", { version, sapis, changes, reset }),
+    phpExtensions: (version) => request("GET", `/api/php/extensions?version=${encodeURIComponent(version)}`),
+    phpExtToggle: (version, module, sapi, on) => request("POST", "/api/php/extensions/toggle", { version, module, sapi, on }),
+    phpExtInstall: (version, module) => request("POST", "/api/php/extensions/install", { version, module }),
+    phpApacheVersion: (version) => request("POST", "/api/php/apache-version", { version }),
+
+    // Network: VPN servers, Dynamic DNS, Port Checker, Monitor
+    vpnOverview: () => request("GET", "/api/vpn/overview"),
+    vpnSettings: (body) => request("POST", "/api/vpn/settings", body),
+    vpn: (kind) => request("GET", `/api/vpn/${kind}`),
+    vpnInstall: (kind) => request("POST", `/api/vpn/${kind}/install`),
+    vpnSetup: (kind, body) => request("POST", `/api/vpn/${kind}/setup`, body),
+    vpnControl: (kind, action) => request("POST", `/api/vpn/${kind}/control`, { action }),
+    vpnSelftest: (kind) => request("POST", `/api/vpn/${kind}/selftest`),
+    vpnClientAdd: (kind, body) => request("POST", `/api/vpn/${kind}/clients`, body),
+    vpnClientRemove: (kind, name) => request("POST", `/api/vpn/${kind}/clients/remove`, { name }),
+    vpnClientConfig: (kind, name) => request("GET", `/api/vpn/${kind}/clients/${encodeURIComponent(name)}/config`),
+    wgToggle: (name, disabled) => request("POST", "/api/vpn/wireguard/clients/toggle", { name, disabled }),
+    ovpnUserAdd: (name, mode, password) => request("POST", "/api/vpn/openvpn/clients", { name, mode, password }),
+    ovpnUserPassword: (name, password) => request("POST", "/api/vpn/openvpn/users/password", { name, password }),
+    ovpnUserMode: (name, mode, password) => request("POST", "/api/vpn/openvpn/users/mode", { name, mode, password }),
+    ovpnUserToggle: (name, disabled) => request("POST", "/api/vpn/openvpn/users/toggle", { name, disabled }),
+    ddns: () => request("GET", "/api/ddns"),
+    ddnsSave: (provider, fields, enabled) => request("POST", "/api/ddns", { provider, fields, enabled }),
+    ddnsUpdate: () => request("POST", "/api/ddns/update"),
+    ddnsDisable: () => request("POST", "/api/ddns/disable"),
+    ddnsStopDdclient: () => request("POST", "/api/ddns/stop-ddclient"),
+    portCheck: (port, proto) => request("POST", "/api/portcheck", { port, proto }),
+    upnpOpen: (port, proto) => request("POST", "/api/portcheck/upnp/open", { port, proto }),
+    upnpClose: (port, proto) => request("POST", "/api/portcheck/upnp/close", { port, proto }),
+    upnpInstall: () => request("POST", "/api/portcheck/upnp/install"),
+    netmon: (hours, scope) => request("GET", `/api/netmon?hours=${encodeURIComponent(hours)}&scope=${encodeURIComponent(scope)}`),
+    netmonLogging: (on) => request("POST", "/api/netmon/logging", { on }),
+    zones: () => request("GET", "/api/domains/zones"),
+    zone: (name) => request("GET", `/api/domains/zone?name=${encodeURIComponent(name)}`),
+    bindInstall: () => request("POST", "/api/domains/bind/install"),
+
+    // domains (extended)
+    vhostCreate: (b) => request("POST", "/api/domains/vhosts/create", b),
+    vhostRemove: (server_name) => request("POST", "/api/domains/vhosts/remove", { server_name }),
+    netOverview: () => request("GET", "/api/net/overview"),
+    netIPv4: (b) => request("POST", "/api/net/ipv4", b),
+    netWifi: (rescan) => request("GET", `/api/net/wifi?rescan=${rescan ? "true" : "false"}`),
+    netWifiConnect: (b) => request("POST", "/api/net/wifi/connect", b),
+    netWifiForget: (name) => request("POST", "/api/net/wifi/forget", { name }),
+    netWifiRadio: (on) => request("POST", "/api/net/wifi/radio", { on }),
+    netHotspot: () => request("GET", "/api/net/hotspot"),
+    netHotspotStart: (b) => request("POST", "/api/net/hotspot/start", b),
+    netHotspotStop: () => request("POST", "/api/net/hotspot/stop"),
+    netHostname: (name) => request("POST", "/api/net/hostname", { name }),
+    netNeighbours: () => request("GET", "/api/net/neighbours"),
+    netPorts: () => request("GET", "/api/net/ports"),
+    netPending: () => request("GET", "/api/net/pending"),
+    netConfirm: (id) => request("POST", "/api/net/confirm", { id }),
+    netRevert: (id) => request("POST", "/api/net/revert", { id }),
+    appsStatus: () => request("GET", "/api/apps2/status"),
+    wpInstall: (options) => request("POST", "/api/apps2/wordpress", { options }),
+    appRemove2: (path, drop_db, remove_site) => request("POST", "/api/apps2/remove", { path, drop_db, remove_site }),
+    appPassword: () => request("GET", "/api/apps2/password"),
+    sites: () => request("GET", "/api/sites"),
+    siteGet: (name) => request("GET", `/api/sites/get?name=${encodeURIComponent(name)}`),
+    siteCreate: (settings) => request("POST", "/api/sites/create", { settings }),
+    siteSave: (original, settings) => request("POST", "/api/sites/save", { original, settings }),
+    siteToggle: (server_name, key, value) => request("POST", "/api/sites/toggle", { server_name, key, value }),
+    siteRemove: (server_name) => request("POST", "/api/sites/remove", { server_name }),
+    certbotInstall: () => request("POST", "/api/sites/certbot/install"),
+    siteLE: (server_name, email, include_aliases) => request("POST", "/api/sites/letsencrypt", { server_name, email, include_aliases }),
+    dnsZones: () => request("GET", "/api/dns/zones"),
+    dnsZone: (domain) => request("GET", `/api/dns/zone?domain=${encodeURIComponent(domain)}`),
+    dnsZoneCreate: (domain, ip, mode) => request("POST", "/api/dns/zone/create", { domain, ip, mode }),
+    dnsZoneDelete: (domain) => request("POST", "/api/dns/zone/delete", { domain }),
+    dnsRecordAdd: (domain, record) => request("POST", "/api/dns/record/add", { domain, record }),
+    dnsRecordUpdate: (domain, index, record, fingerprint) => request("POST", "/api/dns/record/update", { domain, index, record, fingerprint }),
+    dnsRecordDelete: (domain, index, fingerprint) => request("POST", "/api/dns/record/delete", { domain, index, fingerprint }),
+    domainInfo: (name) => request("GET", `/api/domains/info?name=${encodeURIComponent(name)}`),
+
+    // software: app manager
+    apps: () => request("GET", "/api/apps"),
+    appCreate: (b) => request("POST", "/api/apps/create", b),
+    appControl: (name, action) => request("POST", "/api/apps/control", { name, action }),
+    appRemove: (name) => request("POST", "/api/apps/remove", { name }),
+    appLogs: (name) => request("GET", `/api/apps/logs?name=${encodeURIComponent(name)}`),
+    // software: php
+    php: () => request("GET", "/api/php"),
+    phpSet: (version) => request("POST", "/api/php/set", { version }),
+    // software: system applications
+    sysapps: () => request("GET", "/api/sysapps"),
+    sysappInstall: (id, sw) => request("POST", "/api/sysapps/install", { id, switch: !!sw }),
+    sysappUninstall: (id) => request("POST", "/api/sysapps/uninstall", { id }),
+    sysappControl: (id, action, sw) => request("POST", "/api/sysapps/control", { id, action, switch: !!sw }),
+    // preferences
+    prefs: () => request("GET", "/api/account/prefs"),
+    prefsSet: (b) => request("POST", "/api/account/prefs", b),
+    passwordChange: (current, new_password) => request("POST", "/api/account/password", { current, new_password }),
+    renameUser: (username) => request("POST", "/api/account/rename", { username }),
+
+    // databases
+    dbOverview: () => request("GET", "/api/db/overview"),
+    mysql: () => request("GET", "/api/db/mysql"),
+    mysqlCreate: (name) => request("POST", "/api/db/mysql/create", { name }),
+    mysqlDrop: (name) => request("POST", "/api/db/mysql/drop", { name }),
+    mysqlWizard: (b) => request("POST", "/api/db/mysql/wizard", b),
+    pg: () => request("GET", "/api/db/pg"),
+    pgCreate: (name, owner) => request("POST", "/api/db/pg/create", { name, owner: owner || "" }),
+    pgRoleCreate: (b) => request("POST", "/api/db/pg/role/create", b),
+    pgRoleUpdate: (b) => request("POST", "/api/db/pg/role/update", b),
+    pgRolePassword: (name, password) => request("POST", "/api/db/pg/role/password", { name, password }),
+    pgRoleDrop: (name) => request("POST", "/api/db/pg/role/drop", { name }),
+    pgGrant: (db, role, grant) => request("POST", "/api/db/pg/grant", { db, role, grant: !!grant }),
+    pgOwner: (db, role) => request("POST", "/api/db/pg/owner", { db, role }),
+    phppgadminLan: (on) => request("POST", "/api/db/phppgadmin/lan", { on: !!on }),
+    phppgadminInstall: () => request("POST", "/api/db/phppgadmin/install"),
+    pgDrop: (name) => request("POST", "/api/db/pg/drop", { name }),
+    pgRepair: () => request("POST", "/api/db/pg/repair"),
+    pgWizard: (b) => request("POST", "/api/db/pg/wizard", b),
+    dbInstall: (pkg) => request("POST", "/api/db/install", { pkg }),
+
+    // login with optional OTP
+    loginOtp: (username, password, otp) => request("POST", "/api/login", { username, password, otp }),
+
+    // apache .htaccess (Advanced)
+    apacheRaw: (dir) => request("GET", `/api/apache/htaccess?dir=${encodeURIComponent(dir)}`),
+    apacheIndexes: (dir) => request("GET", `/api/apache/indexes?dir=${encodeURIComponent(dir)}`),
+    apacheSetIndexes: (b) => request("POST", "/api/apache/indexes", b),
+    apacheMime: (dir) => request("GET", `/api/apache/mime?dir=${encodeURIComponent(dir)}`),
+    apacheAddMime: (b) => request("POST", "/api/apache/mime", b),
+    apacheErrors: (dir) => request("GET", `/api/apache/errors?dir=${encodeURIComponent(dir)}`),
+    apacheSetError: (b) => request("POST", "/api/apache/errors", b),
+    apacheHandlers: (dir) => request("GET", `/api/apache/handlers?dir=${encodeURIComponent(dir)}`),
+    apacheAddHandler: (b) => request("POST", "/api/apache/handlers", b),
+    apacheRemove: (dir, raw) => request("POST", "/api/apache/remove", { dir, raw }),
+
+    // track dns (Advanced)
+    dnsRecords: (host) => request("GET", `/api/dns/records?host=${encodeURIComponent(host)}`),
+    dnsReverse: (ip) => request("GET", `/api/dns/reverse?ip=${encodeURIComponent(ip)}`),
+    dnsTrace: (host) => request("GET", `/api/dns/traceroute?host=${encodeURIComponent(host)}`),
+    ping: (host) => request("GET", `/api/net/ping?host=${encodeURIComponent(host)}&count=4`),
+
+    // virus scanner (Advanced)
+    avStatus: () => request("GET", "/api/antivirus/status"),
+    avScan: (path, recursive) => request("POST", "/api/antivirus/scan", { path, recursive }),
+    avUpdate: () => request("POST", "/api/antivirus/update"),
+  };
+})();

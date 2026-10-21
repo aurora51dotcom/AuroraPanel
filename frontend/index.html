@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>AuroraPanel</title>
+  <link rel="stylesheet" href="/vendor/xterm.min.css" />
+  <link rel="stylesheet" href="/css/style.css?v=__V__" />
+</head>
+<body>
+  <!-- Auth screen (login / first-run setup) -->
+  <div id="auth-screen" class="auth-screen" hidden>
+    <div class="auth-card">
+      <div class="brand">
+        <span class="brand-mark">◆</span>
+        <span class="brand-name">AuroraPanel</span>
+      </div>
+      <p id="auth-subtitle" class="auth-subtitle">Sign in to your Raspberry Pi</p>
+      <form id="auth-form" autocomplete="off">
+        <label>Username
+          <input id="auth-username" name="username" type="text" required autocomplete="username" />
+        </label>
+        <label>Password
+          <input id="auth-password" name="password" type="password" required autocomplete="current-password" />
+        </label>
+        <p id="auth-error" class="form-error" hidden></p>
+        <button id="auth-submit" type="submit" class="btn btn-primary btn-block">Sign in</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Main application shell -->
+  <div id="app-shell" class="app-shell" hidden>
+    <aside class="rail">
+      <button id="rail-brand" class="rail-brand" type="button" title="AuroraPanel"><span class="brand-mark">◆</span></button>
+      <div id="rail-groups" class="rail-groups"></div>
+      <button id="rail-settings" class="rail-btn" type="button" title="Preferences"></button>
+    </aside>
+      <nav id="nav" class="nav-source" hidden>
+        <div class="nav-group">System</div>
+        <button class="nav-item active" data-view="dashboard"><span class="nav-ico">▤</span> Dashboard</button>
+        <button class="nav-item" data-view="services"><span class="nav-ico">⚙</span> Services</button>
+        <button class="nav-item" data-view="processes"><span class="nav-ico">◷</span> Processes</button>
+        <button class="nav-item" data-view="packages"><span class="nav-ico">▣</span> Packages</button>
+        <button class="nav-item" data-view="firewall"><span class="nav-ico">⛨</span> Firewall</button>
+        <button class="nav-item" data-view="users"><span class="nav-ico">☻</span> Users</button>
+        <div class="nav-group">Network</div>
+        <button class="nav-item" data-view="vpn"><span class="nav-ico">⛨</span> VPN Overview</button>
+        <button class="nav-item" data-view="wireguard"><span class="nav-ico">⛨</span> WireGuard</button>
+        <button class="nav-item" data-view="openvpn"><span class="nav-ico">⛨</span> OpenVPN</button>
+        <button class="nav-item" data-view="ipsec"><span class="nav-ico">⛨</span> IPsec / IKEv2</button>
+        <button class="nav-item" data-view="dyndns"><span class="nav-ico">🔄</span> Dynamic DNS</button>
+        <button class="nav-item" data-view="portcheck"><span class="nav-ico">⇅</span> Port Checker</button>
+        <button class="nav-item" data-view="netmon"><span class="nav-ico">⇅</span> Network Monitor</button>
+        <button class="nav-item" data-view="ipblocker"><span class="nav-ico">⛔</span> IP Blocker &amp; Trust</button>
+        <button class="nav-item" data-view="leech"><span class="nav-ico">🪤</span> Fail2ban</button>
+        <button class="nav-item" data-view="network"><span class="nav-ico">⇅</span> Interfaces &amp; Wi-Fi</button>
+        <div class="nav-group">Databases</div>
+        <button class="nav-item" data-view="mysql"><span class="nav-ico">🗄</span> Manage Databases</button>
+        <button class="nav-item" data-view="mysqlwiz"><span class="nav-ico">🧭</span> Database Wizard</button>
+        <button class="nav-item" data-view="pgsql"><span class="nav-ico">🐘</span> PostgreSQL</button>
+        <button class="nav-item" data-view="pgwiz"><span class="nav-ico">🧭</span> PostgreSQL Wizard</button>
+        <div class="nav-group">Domains</div>
+        <button class="nav-item" data-view="vhosts"><span class="nav-ico">🌐</span> Domains</button>
+        <button class="nav-item" data-view="redirects"><span class="nav-ico">↪</span> Redirects</button>
+        <button class="nav-item" data-view="zones"><span class="nav-ico">🧾</span> Zone Editor</button>
+        <div class="nav-group">Security</div>
+        <button class="nav-item" data-view="ssh"><span class="nav-ico">🔑</span> SSH Access</button>
+        <button class="nav-item" data-view="ipblocker"><span class="nav-ico">⛔</span> IP Blocker &amp; Trust</button>
+        <button class="nav-item" data-view="ssl"><span class="nav-ico">🔒</span> SSL/TLS</button>
+        <button class="nav-item" data-view="tokens"><span class="nav-ico">🎟</span> API Tokens</button>
+        <button class="nav-item" data-view="hotlink"><span class="nav-ico">🔗</span> Hotlink Protection</button>
+        <button class="nav-item" data-view="leech"><span class="nav-ico">🪤</span> Fail2ban</button>
+        <button class="nav-item" data-view="modsec"><span class="nav-ico">🧱</span> ModSecurity</button>
+        <button class="nav-item" data-view="security"><span class="nav-ico">🔑</span> Two-Factor Auth</button>
+        <button class="nav-item" data-view="fixperms"><span class="nav-ico">🏠</span> Fix Permissions</button>
+        <button class="nav-item" data-view="virus"><span class="nav-ico">🦠</span> Antivirus</button>
+        <div class="nav-group">Files</div>
+        <button class="nav-item" data-view="files"><span class="nav-ico">🗀</span> File Manager</button>
+        <button class="nav-item" data-view="images"><span class="nav-ico">🖼</span> Images</button>
+        <button class="nav-item" data-view="dirprivacy"><span class="nav-ico">🔒</span> Directory Privacy</button>
+        <button class="nav-item" data-view="disk"><span class="nav-ico">◐</span> Disk Usage</button>
+        <button class="nav-item" data-view="webdisk"><span class="nav-ico">🗄</span> Web Disk</button>
+        <button class="nav-item" data-view="ftpaccounts"><span class="nav-ico">⇅</span> FTP Accounts</button>
+        <button class="nav-item" data-view="backups"><span class="nav-ico">⭳</span> Backup</button>
+        <button class="nav-item" data-view="backupwiz"><span class="nav-ico">🧭</span> Backup Wizard</button>
+        <button class="nav-item" data-view="git"><span class="nav-ico">⎇</span> Git Version Control</button>
+        <button class="nav-item" data-view="inodes"><span class="nav-ico">#</span> Inodes Usage</button>
+        <div class="nav-group">Advanced</div>
+        <button class="nav-item" data-view="terminal"><span class="nav-ico">▸</span> Terminal</button>
+        <button class="nav-item" data-view="cron"><span class="nav-ico">⏱</span> Cron Jobs</button>
+        <button class="nav-item" data-view="indexes"><span class="nav-ico">☰</span> Indexes</button>
+        <button class="nav-item" data-view="mime"><span class="nav-ico">≣</span> MIME Types</button>
+        <button class="nav-item" data-view="errorpages"><span class="nav-ico">⚠</span> Error Pages</button>
+        <button class="nav-item" data-view="handlers"><span class="nav-ico">⛭</span> Apache Handlers</button>
+        <button class="nav-item" data-view="virus"><span class="nav-ico">🛡</span> Virus Scanner</button>
+        <button class="nav-item" data-view="dns"><span class="nav-ico">🌐</span> Track DNS</button>
+        <div class="nav-group">Applications</div>
+        <button class="nav-item" data-view="wordpress"><span class="nav-ico">W</span> WordPress</button>
+        <div class="nav-group">Software</div>
+        <button class="nav-item" data-view="sysapps"><span class="nav-ico">▤</span> System Applications</button>
+        <button class="nav-item" data-view="appmgr"><span class="nav-ico">▣</span> Application Manager</button>
+        <button class="nav-item" data-view="phpver"><span class="nav-ico">🧱</span> PHP Settings</button>
+        <div class="nav-group">Preferences</div>
+        <button class="nav-item" data-view="password"><span class="nav-ico">🔒</span> Password &amp; Security</button>
+        <button class="nav-item" data-view="accountprefs"><span class="nav-ico">⚙</span> Account Preferences</button>
+        <button class="nav-item" data-view="contact"><span class="nav-ico">📇</span> Contact Info</button>
+        <button class="nav-item" data-view="language"><span class="nav-ico">🌐</span> Change Language</button>
+        <button class="nav-item" data-view="about"><span class="nav-ico">ℹ</span> About &amp; Updates</button>
+      </nav>
+
+    <main class="content">
+      <header class="topbar">
+        <div class="hello">
+          <h1><span id="view-title">Dashboard</span><span id="host-badge" class="badge">—</span></h1>
+          <div class="hello-sub">
+            <span data-ic="cron"></span><span id="now-date"></span><span class="sep">|</span><span id="now-time"></span>
+            <span class="gap"></span><span data-ic="calendar"></span><span id="now-week"></span>
+            <span id="view-crumb" class="crumb"></span>
+          </div>
+        </div>
+        <div class="topbar-right">
+          <button id="cmdk-open" class="topbar-search" type="button">
+            <span class="ts-ico" data-ic="search"></span>
+            <span class="ts-text">Search tools</span>
+            <span class="ts-kbd">⌘K</span>
+          </button>
+          <button id="refresh-btn" class="icon-btn" type="button" title="Refresh" data-ic="refresh"></button>
+          <button id="theme-btn" class="icon-btn" type="button" title="Toggle theme"></button>
+          <div class="avatar-wrap">
+            <button id="avatar-btn" class="avatar" type="button" title="Account"><span id="avatar-initial">U</span></button>
+            <div id="avatar-menu" class="avatar-menu" hidden>
+              <div class="am-user" id="user-label"></div>
+              <div class="am-host" id="host-label">—</div>
+              <button id="am-version" class="am-version" type="button" title="About &amp; updates">AuroraPanel</button>
+              <button id="logout-btn" class="btn btn-sm btn-block" type="button">Sign out</button>
+            </div>
+          </div>
+        </div>
+      </header>
+      <div class="tabs-row">
+        <div id="tabs" class="tabs"></div>
+      </div>
+      <section id="view-root" class="view-root"><!-- views render here --></section>
+    </main>
+  </div>
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="/vendor/xterm.min.js"></script>
+  <script src="/vendor/xterm-addon-fit.min.js"></script>
+  <script src="/js/api.js?v=__V__"></script>
+  <script src="/js/app.js?v=__V__"></script>
+</body>
+</html>

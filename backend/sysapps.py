@@ -1,0 +1,296 @@
+"""System Applications — one-click install/manage for a fixed catalog of server
+software (web servers, PHP-FPM, MariaDB, FTP).
+
+Only catalog ids are accepted from the client; package and service names come
+from CATALOG, so nothing the user types reaches apt or systemctl. Only one web
+server may own port 80: installing/starting a second one requires an explicit
+"switch", which stops and disables the running one first.
+"""
+from __future__ import annotations
+
+import glob
+import platform
+import re
+import shutil
+import subprocess
+import time
+from pathlib import Path
+
+from . import jobs
+
+IS_LINUX = platform.system() == "Linux"
+_APT_ENV = {"DEBIAN_FRONTEND": "noninteractive", "PATH": "/usr/sbin:/usr/bin:/sbin:/bin"}
+# Wait for a background apt/unattended-upgrades run instead of failing on the lock.
+_APT = ["apt-get", "-o", "DPkg::Lock::Timeout=600", "-y"]
+
+CATALOG: dict[str, dict] = {
+    "apache": {
+        "name": "Apache", "group": "web", "pkg": "apache2", "service": "apache2",
+        "procs": ("apache2",), "ram": "~25–60 MB",
+        "desc": "The classic web server. Needed for .htaccess, phpMyAdmin and the panel's Apache tools.",
+    },
+    "nginx": {
+        "name": "Nginx", "group": "web", "pkg": "nginx", "service": "nginx",
+        "procs": ("nginx",), "ram": "~5–15 MB",
+        "desc": "Fast, event-driven web server and reverse proxy. Pair with PHP-FPM for PHP.",
+    },
+    "lighttpd": {
+        "name": "Lighttpd", "group": "web", "pkg": "lighttpd", "service": "lighttpd",
+        "procs": ("lighttpd",), "ram": "~2–5 MB",
+        "desc": "Smallest footprint — a good fit for a Pi Zero or very low-memory boards.",
+    },
+    "caddy": {
+        "name": "Caddy", "group": "web", "pkg": "caddy", "service": "caddy",
+        "procs": ("caddy",), "ram": "~15–30 MB",
+        "desc": "Modern web server that obtains and renews HTTPS certificates automatically.",
+    },
+    "phpfpm": {
+        "name": "PHP-FPM", "group": "extra", "pkg": "php-fpm", "service": None,
+        "procs": ("php-fpm",), "ram": "~20–40 MB",
+        "desc": "PHP process manager used by Nginx, Lighttpd and Caddy to run PHP sites.",
+    },
+    "mariadb": {
+        "name": "MariaDB", "group": "extra", "pkg": "mariadb-server", "service": "mariadb",
+        "procs": ("mariadbd", "mysqld"), "ram": "~80–150 MB",
+        "desc": "MySQL-compatible database server (WordPress, most PHP apps).",
+    },
+    "postgresql": {
+        "name": "PostgreSQL", "group": "extra", "pkg": "postgresql", "service": "postgresql",
+        "procs": ("postgres",), "ram": "~30–60 MB",
+        "desc": "Advanced open-source SQL database (Django, Rails, Nextcloud, many Python apps).",
+    },
+    "vsftpd": {
+        "name": "vsftpd", "group": "extra", "pkg": "vsftpd", "service": "vsftpd",
+        "procs": ("vsftpd",), "ram": "~1–3 MB",
+        "desc": "Lightweight, secure FTP server for uploading site files.",
+    },
+}
+WEB_SERVERS = [k for k, v in CATALOG.items() if v["group"] == "web"]
+_ACTIONS = {"start", "stop", "restart"}
+
+
+class SysAppError(RuntimeError):
+    pass
+
+
+class ConflictError(SysAppError):
+    """Another web server already owns port 80; the client must confirm a switch."""
+
+    def __init__(self, msg: str, other: str):
+        super().__init__(msg)
+        self.other = other
+
+
+def _app(app_id: str) -> dict:
+    if app_id not in CATALOG:
+        raise SysAppError("Unknown application")
+    return CATALOG[app_id]
+
+
+def _require_linux():
+    if not IS_LINUX or not shutil.which("apt-get") or not shutil.which("systemctl"):
+        raise SysAppError("apt/systemd are not available on this host")
+
+
+def _service(app_id: str) -> str | None:
+    svc = CATALOG[app_id]["service"]
+    if svc is None and app_id == "phpfpm":
+        # Versioned unit, e.g. php8.4-fpm.service.
+        units = sorted(glob.glob("/lib/systemd/system/php*-fpm.service") + glob.glob("/usr/lib/systemd/system/php*-fpm.service"))
+        svc = Path(units[-1]).stem if units else None
+    return svc
+
+
+def _dpkg_status(pkgs: list[str]) -> dict[str, str | None]:
+    """pkg -> installed version, or None when not installed."""
+    result: dict[str, str | None] = {p: None for p in pkgs}
+    if not IS_LINUX or not shutil.which("dpkg-query"):
+        return result
+    out = subprocess.run(["dpkg-query", "-W", "-f=${Package}\t${db:Status-Abbrev}\t${Version}\n", *pkgs],
+                         capture_output=True, text=True, timeout=15)
+    for line in out.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) == 3 and parts[1].startswith("ii"):
+            result[parts[0]] = parts[2]
+    return result
+
+
+def _pg_server_pkgs() -> dict[str, str]:
+    """Installed versioned server packages (postgresql-17 …) -> version. The "postgresql"
+    metapackage is optional, so these are what really say Postgres is installed."""
+    if not IS_LINUX or not shutil.which("dpkg-query"):
+        return {}
+    out = subprocess.run(["dpkg-query", "-W", "-f=${Package}\t${db:Status-Abbrev}\t${Version}\n", "postgresql-[0-9]*"],
+                         capture_output=True, text=True, timeout=15)
+    return {p[0]: p[2] for p in (l.split("\t") for l in out.stdout.splitlines())
+            if len(p) == 3 and p[1].startswith("ii") and re.fullmatch(r"postgresql-\d+", p[0])}
+
+
+def _active(units: list[str]) -> dict[str, bool]:
+    if not units or not shutil.which("systemctl"):
+        return {u: False for u in units}
+    out = subprocess.run(["systemctl", "is-active", *units], capture_output=True, text=True, timeout=10)
+    states = out.stdout.split()
+    return {u: (states[i] == "active" if i < len(states) else False) for i, u in enumerate(units)}
+
+
+def _read(path: str) -> str:
+    try:
+        return Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def _docroot(app_id: str) -> str | None:
+    """The default site's web folder, read from the server's own config."""
+    pats = {
+        "apache": (["/etc/apache2/sites-enabled/000-default.conf", "/etc/apache2/sites-available/000-default.conf"],
+                   r"^\s*DocumentRoot\s+\"?([^\"\s]+)", "/var/www/html"),
+        "nginx": (["/etc/nginx/sites-enabled/default", "/etc/nginx/sites-available/default"],
+                  r"^\s*root\s+([^;\s]+)\s*;", "/var/www/html"),
+        "lighttpd": (["/etc/lighttpd/lighttpd.conf"],
+                     r"^\s*server\.document-root\s*=\s*\"([^\"]+)\"", "/var/www/html"),
+        "caddy": (["/etc/caddy/Caddyfile"], r"^\s*root\s+\*\s+(\S+)", "/usr/share/caddy"),
+    }
+    if app_id not in pats:
+        return None
+    files, rx, default = pats[app_id]
+    for f in files:
+        m = re.search(rx, _read(f), re.MULTILINE)
+        if m:
+            return m.group(1)
+    return default
+
+
+def _ram_mb() -> dict[str, float]:
+    """Actual resident memory per catalog app (sum over its processes)."""
+    try:
+        import psutil
+    except ImportError:
+        return {}
+    by_proc = {p: k for k, v in CATALOG.items() for p in v["procs"]}
+    totals: dict[str, float] = {}
+    for proc in psutil.process_iter(["name", "memory_info"]):
+        name = proc.info.get("name") or ""
+        mi = proc.info.get("memory_info")
+        if not mi:
+            continue
+        key = by_proc.get(name) or ("phpfpm" if name.startswith("php-fpm") else None)
+        if key:
+            totals[key] = totals.get(key, 0.0) + mi.rss / 1048576
+    return {k: round(v, 1) for k, v in totals.items()}
+
+
+def status() -> dict:
+    if not IS_LINUX:
+        return {"supported": False, "apps": []}
+    versions = _dpkg_status([v["pkg"] for v in CATALOG.values()])
+    pg = _pg_server_pkgs()
+    if pg:
+        versions["postgresql"] = pg[max(pg, key=lambda p: int(p.split("-")[1]))]
+    services = {k: _service(k) for k in CATALOG}
+    active = _active([s for s in services.values() if s])
+    ram = _ram_mb()
+    apps = []
+    for k, v in CATALOG.items():
+        svc = services[k]
+        installed = versions.get(v["pkg"]) is not None
+        apps.append({
+            "id": k, "name": v["name"], "group": v["group"], "desc": v["desc"], "ram_typical": v["ram"],
+            "package": v["pkg"], "service": svc, "installed": installed, "version": versions.get(v["pkg"]),
+            "active": bool(svc and active.get(svc)), "ram_mb": ram.get(k),
+            "docroot": _docroot(k) if installed else None,
+        })
+    return {"supported": True, "apps": apps}
+
+
+# Cached for the file manager, which asks on every directory listing.
+_web_cache: tuple[float, str | None] = (0.0, None)
+
+
+def web_root() -> str | None:
+    """Web folder of the active (else installed) web server, or None if there is none."""
+    global _web_cache
+    if time.time() - _web_cache[0] < 10:
+        return _web_cache[1]
+    root = None
+    if IS_LINUX:
+        versions = _dpkg_status([CATALOG[k]["pkg"] for k in WEB_SERVERS])
+        installed = [k for k in WEB_SERVERS if versions.get(CATALOG[k]["pkg"])]
+        active = _active([CATALOG[k]["service"] for k in installed])
+        # Apache first (the user's default stack), but a running server beats an idle one.
+        ranked = sorted(installed, key=lambda k: (not active.get(CATALOG[k]["service"]), k != "apache"))
+        for k in ranked:
+            d = _docroot(k)
+            if d and Path(d).is_dir():
+                root = d
+                break
+    _web_cache = (time.time(), root)
+    return root
+
+
+def _running_web_server(exclude: str) -> str | None:
+    others = [k for k in WEB_SERVERS if k != exclude]
+    active = _active([CATALOG[k]["service"] for k in others])
+    for k in others:
+        if active.get(CATALOG[k]["service"]):
+            return k
+    return None
+
+
+def _check_port80(app_id: str, switch: bool):
+    """Raise ConflictError, or (when switching) stop+disable the running web server."""
+    if CATALOG[app_id]["group"] != "web":
+        return
+    other = _running_web_server(app_id)
+    if not other:
+        return
+    if not switch:
+        raise ConflictError(
+            f"{CATALOG[other]['name']} is running on port 80. Stop it and switch to {CATALOG[app_id]['name']}?", other)
+    svc = CATALOG[other]["service"]
+    subprocess.run(["systemctl", "disable", "--now", svc], capture_output=True, text=True, timeout=60)
+
+
+def install(app_id: str, switch: bool = False) -> jobs.Job:
+    _require_linux()
+    v = _app(app_id)
+    _check_port80(app_id, switch)
+    global _web_cache
+    _web_cache = (0.0, None)
+    return jobs.launch(f"install {v['name']}", [*_APT, "install", v["pkg"]], env=_APT_ENV, meta={"app": app_id})
+
+
+def uninstall(app_id: str) -> jobs.Job:
+    _require_linux()
+    v = _app(app_id)
+    global _web_cache
+    _web_cache = (0.0, None)
+    pkgs = [v["pkg"]]
+    if app_id == "postgresql":
+        # "postgresql" is a metapackage; the server itself is the versioned postgresql-NN.
+        pkgs += list(_pg_server_pkgs())
+    # "remove" (not purge): config files, site content and database files stay on disk.
+    return jobs.launch(f"uninstall {v['name']}", [*_APT, "remove", *pkgs], env=_APT_ENV, meta={"app": app_id})
+
+
+def control(app_id: str, action: str, switch: bool = False) -> dict:
+    _require_linux()
+    _app(app_id)
+    if action not in _ACTIONS:
+        raise SysAppError("Invalid action")
+    svc = _service(app_id)
+    if not svc:
+        raise SysAppError("This application has no service (is it installed?)")
+    if action in ("start", "restart"):
+        _check_port80(app_id, switch)
+    cmds = [["systemctl", action, svc]]
+    if action == "start":
+        cmds.append(["systemctl", "enable", svc])  # a switched-to server should survive a reboot
+    for cmd in cmds:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        if out.returncode != 0:
+            raise SysAppError(out.stderr.strip() or f"systemctl {action} {svc} failed")
+    global _web_cache
+    _web_cache = (0.0, None)
+    return {"ok": True, "service": svc, "action": action}
