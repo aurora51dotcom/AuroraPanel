@@ -210,7 +210,7 @@ def api_login(body: LoginBody, request: Request):
     ip = _client_ip(request)
     wait = _login_blocked(ip)
     if wait:
-        raise HTTPException(status_code=429, detail=f"Too many failed logins. Try again in {wait // 60 + 1} min.")
+        raise HTTPException(status_code=429, detail=f"Too many failed logins. Try again in {(wait + 59) // 60} min.")
     if not config.verify_credentials(body.username, body.password):
         _login_failed(ip)
         _auth_log(False, body.username, request)
