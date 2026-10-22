@@ -3913,6 +3913,8 @@
           el("td", {}, el("div", { class: "dm-name" }, [
             el("a", { href: `${scheme}://${s.server_name}/`, target: "_blank", rel: "noopener", title: "Open site" }, [icon("link", 13), " ", s.server_name]),
             s.aliases.length ? el("span", { class: "dm-alias", text: "+ " + s.aliases.join(", ") }) : null,
+            // The two stock sites usually share one name — say which is the http and which the https one.
+            s.system ? el("span", { class: "dm-alias", text: s.has_http ? `${s.conf} · http (port 80)` : `${s.conf} · https (port 443)` }) : null,
             el("span", { class: "dm-tags" }, [
               s.system ? el("span", { class: "pill dim", text: "system" }) : null,
               !s.managed && !s.system ? el("span", { class: "pill dim", title: "Hand-written config — saving it once lets AuroraPanel manage it (original is backed up)", text: "manual" }) : null,
@@ -4016,7 +4018,7 @@
 
       const head = el("div", { class: "dmm-head" }, [
         el("button", { class: "btn btn-sm btn-ghost", onclick: () => navigate("vhosts") }, [el("span", { class: "dmm-back", html: "&larr;" }), " Domains"]),
-        el("h2", {}, ["Manage ", el("span", { class: "accent", text: `“${d.settings.server_name}”` })]),
+        el("h2", {}, ["Manage ", el("span", { class: "accent", text: `“${d.settings.server_name}”` }), ro ? el("span", { class: "muted", style: "font-size:.6em;margin-left:10px", text: d.has_http ? "http · port 80" : "https · port 443" }) : null]),
         el("span", { class: "grow" }),
         el("a", { class: "btn btn-sm", href: `${d.settings.ssl !== "none" ? "https" : "http"}://${d.settings.server_name}/`, target: "_blank", rel: "noopener" }, [icon("link", 13), " Visit site"]),
       ]);
