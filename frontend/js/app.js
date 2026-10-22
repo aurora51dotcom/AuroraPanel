@@ -3923,10 +3923,10 @@
           el("td", {}, el("span", { class: "dm-root" }, [icon("home", 13), " ", s.docroot || "—"])),
           el("td", { class: s.redirect_url ? "" : "muted", text: s.redirect_url || "Not Redirected" }),
           el("td", {}, sw(s.force_https, async (v, inp) => {
-            if (v && s.ssl === "none" && !confirmInline(`${s.server_name} has no certificate yet.\n\nA self-signed certificate will be created so HTTPS works now (browsers will warn). You can switch to a free Let's Encrypt certificate in Manage.\n\nContinue?`)) { inp.checked = false; return; }
-            try { await API.siteToggle(s.server_name, "force_https", v); toast(`Force HTTPS ${v ? "on" : "off"} · ${s.server_name}`, "good"); load(); }
+            if (v && s.ssl === "none" && !s.system && !confirmInline(`${s.server_name} has no certificate yet.\n\nA self-signed certificate will be created so HTTPS works now (browsers will warn). You can switch to a free Let's Encrypt certificate in Manage.\n\nContinue?`)) { inp.checked = false; return; }
+            try { await API.siteToggle(s.system ? s.conf : s.server_name, "force_https", v); toast(`Force HTTPS ${v ? "on" : "off"} · ${s.server_name}`, "good"); load(); }
             catch (e) { inp.checked = !v; toast(e.message, "bad"); }
-          }, { disabled: s.system, title: s.system ? "System site" : "Redirect all HTTP traffic to HTTPS" })),
+          }, { disabled: s.system && !s.has_http, title: s.system && !s.has_http ? "This is the HTTPS site — turn on Force HTTPS on the default (http) site" : "Redirect all HTTP traffic to HTTPS" })),
           el("td", {}, sslPill(s)),
           el("td", { class: "actions" }, [
             el("button", { class: "btn btn-sm", onclick: () => openDomain(s.system ? s.conf : s.server_name) }, [icon("services", 13), " Manage"]),
@@ -4021,7 +4021,7 @@
         el("a", { class: "btn btn-sm", href: `${d.settings.ssl !== "none" ? "https" : "http"}://${d.settings.server_name}/`, target: "_blank", rel: "noopener" }, [icon("link", 13), " Visit site"]),
       ]);
       root.append(head);
-      if (ro) root.append(el("div", { class: "dm-note warn" }, [icon("lock", 15), el("span", { text: "This is a system default site (" + d.conf + "). Its settings are read-only so the panel never breaks Apache's fallback site, but you can turn it on or off." }),
+      if (ro) root.append(el("div", { class: "dm-note warn" }, [icon("lock", 15), el("span", { text: "This is a system default site (" + d.conf + "). Its settings are read-only so the panel never breaks Apache's fallback site, but you can turn it on or off and use Force HTTPS." }),
         el("button", { class: "btn btn-sm", style: "margin-left:auto;flex-shrink:0", text: d.enabled ? "Disable site" : "Enable site", onclick: async (e) => {
           e.target.disabled = true;
           try { await API.siteToggle(d.conf, "enabled", !d.enabled); toast(`${d.settings.server_name} ${d.enabled ? "disabled" : "enabled"}`, "good"); load(); }
@@ -4117,11 +4117,19 @@
         }
       };
       drawSsl();
+      // System sites: Force HTTPS applies right away (no save bar — the rest of the page is read-only).
+      const sysForce = () => el("div", { class: "dm-trow" }, [
+        el("div", {}, [el("b", { text: "Force HTTPS redirect" }), el("span", { text: d.has_http ? "Send every http:// visit to https:// (301). Applied immediately." : "This is the HTTPS site — use Force HTTPS on the default (http) site." })]),
+        sw(d.settings.force_https, async (v, inp) => {
+          try { await API.siteToggle(d.conf, "force_https", v); toast(`Force HTTPS ${v ? "on" : "off"}`, "good"); load(); }
+          catch (e) { inp.checked = !v; toast(e.message, "bad"); }
+        }, { disabled: !d.has_http }),
+      ]);
       const httpsToggles = el("div", {}, [
-        toggleRow("force_https", "Force HTTPS redirect", "Send every http:// visit to https:// (301). Let's Encrypt renewals still work."),
+        ro ? sysForce() : toggleRow("force_https", "Force HTTPS redirect", "Send every http:// visit to https:// (301). Let's Encrypt renewals still work."),
         toggleRow("hsts", "HSTS", "Tell browsers to only ever use HTTPS for a year. Enable once HTTPS is working reliably."),
       ]);
-      const syncHttps = () => httpsToggles.classList.toggle("dm-dim", s.ssl === "none");
+      const syncHttps = () => httpsToggles.classList.toggle("dm-dim", s.ssl === "none" && !ro);
       left.append(card("lock", "HTTPS / SSL", "Encrypt traffic and choose where the certificate comes from.",
         seg("ssl", [["none", "None"], ["selfsigned", "Self-signed"], ...(ipSite ? [] : [["letsencrypt", "Let's Encrypt"]]), ["custom", "Custom"]], (v) => { if (v === "none") { s.force_https = false; s.hsts = false; httpsToggles.querySelectorAll(".sw-in").forEach((i) => { i.checked = false; }); } drawSsl(); syncHttps(); }),
         certRow, sslDetail, httpsToggles));

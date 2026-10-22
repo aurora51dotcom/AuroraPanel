@@ -19,6 +19,7 @@ import platform
 import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 from . import jobs, sslcerts
@@ -150,20 +151,35 @@ def _cert_info(s: dict) -> dict | None:
     return sslcerts._inspect(Path(path))
 
 
+def _live_conf(conf: Path) -> Path:
+    """The file Apache actually loads: a hand-copied regular file in sites-enabled wins over sites-available."""
+    e = ENABLED / conf.name
+    return e if e.exists() and not e.is_symlink() else conf
+
+
+def _has_http(conf: Path) -> bool:
+    try:
+        return any(b["port"] == 80 for b in _blocks(_live_conf(conf).read_text(errors="replace")))
+    except OSError:
+        return False
+
+
 def list_sites() -> dict:
     if not (IS_LINUX and AVAIL.exists()):
         return {"supported": False, "sites": []}
     sites = []
     for f in sorted(AVAIL.glob("*.conf")):
+        system = f.name in SYSTEM_CONFS
         try:
-            s = _settings_from_conf(f)
+            s = _settings_from_conf(_live_conf(f) if system else f)
         except (SiteError, OSError):
             continue
         cert = _cert_info(s) if s["ssl"] != "none" else None
         sites.append({
             "server_name": s["server_name"], "aliases": s["aliases"], "docroot": s["docroot"],
             "conf": f.name, "enabled": (ENABLED / f.name).exists(), "managed": s["_managed"],
-            "system": f.name in SYSTEM_CONFS, "ssl": s["ssl"], "force_https": s["force_https"],
+            "system": system, "ssl": s["ssl"], "force_https": s["force_https"],
+            "has_http": _has_http(f) if system else True,
             "redirect_url": s["redirect_url"], "maintenance": s["maintenance"],
             "cert_expires": cert.get("expires") if cert else None,
             "cert_self_signed": cert.get("self_signed") if cert else None,
@@ -176,13 +192,16 @@ def get_site(name: str) -> dict:
     conf = _conf_for(name)
     if not conf:
         raise SiteError("No site found with that name")
-    s = _settings_from_conf(conf)
+    system = conf.name in SYSTEM_CONFS
+    src = _live_conf(conf) if system else conf
+    s = _settings_from_conf(src)
     cert = _cert_info(s) if s["ssl"] != "none" else None
     return {"settings": {k: v for k, v in s.items() if not k.startswith("_")}, "managed": s["_managed"],
-            "conf": conf.name, "system": conf.name in SYSTEM_CONFS, "enabled": (ENABLED / conf.name).exists(),
+            "conf": conf.name, "system": system, "enabled": (ENABLED / conf.name).exists(),
+            "has_http": _has_http(conf) if system else True,
             "cert": cert, "certbot": bool(shutil.which("certbot")),
             "le_available": (LE_LIVE / s["server_name"] / "fullchain.pem").exists(),
-            "config_text": conf.read_text(errors="replace")[:30000]}
+            "config_text": src.read_text(errors="replace")[:30000]}
 
 
 # --------------------------------------------------------------------------- #
@@ -461,9 +480,11 @@ def quick_toggle(name: str, key: str, value: bool) -> dict:
         raise SiteError("Unsupported toggle")
     cur = get_site(name)
     if cur["system"]:
-        if key != "enabled":
-            raise SiteError("System default sites can only be enabled or disabled")
-        return _set_system_enabled(AVAIL / cur["conf"], bool(value))
+        if key == "enabled":
+            return _set_system_enabled(AVAIL / cur["conf"], bool(value))
+        if key == "force_https":
+            return _set_system_force_https(AVAIL / cur["conf"], bool(value))
+        raise SiteError("System default sites can only be enabled/disabled or use Force HTTPS")
     s = cur["settings"]
     if key == "force_https" and value and s["ssl"] == "none":
         s["ssl"] = "selfsigned"   # needs *a* cert; upgrade to Let's Encrypt from Manage
@@ -491,6 +512,50 @@ def _set_system_enabled(conf: Path, enabled: bool) -> dict:
     test = _run(["apache2ctl", "configtest"])
     if test.returncode != 0:
         _run(["a2dissite" if enabled else "a2ensite", "-q", conf.name])
+        err = "\n".join(l for l in (test.stderr + test.stdout).splitlines() if "AH00558" not in l).strip()
+        raise SiteError("Apache rejected the config, nothing was changed:\n" + err[:1500])
+    r = _run(["systemctl", "reload", "apache2"])
+    if r.returncode != 0:
+        _run(["systemctl", "restart", "apache2"])
+    return {"ok": True}
+
+
+_FH_BEGIN, _FH_END = "# aurora-force-https begin", "# aurora-force-https end"
+_FH_BLOCK = re.compile(rf"\n[ \t]*{re.escape(_FH_BEGIN)}.*?{re.escape(_FH_END)}[ \t]*", re.S)
+SITE_BAK = Path("/var/lib/aurora/site-backups")
+
+
+def _set_system_force_https(conf: Path, on: bool) -> dict:
+    """Add/remove a marked redirect inside a stock conf's :80 VirtualHost; the rest of the file is untouched."""
+    live = _live_conf(conf)
+    text = live.read_text(errors="replace")
+    bare = _FH_BLOCK.sub("", text)
+    if on:
+        http = re.search(r"(?m)^[ \t]*<VirtualHost\s+[^>]*:80\s*>.*?(?=\n[ \t]*</VirtualHost>)", bare, re.S | re.I)
+        if not http:
+            raise SiteError(f"{conf.name} has no http (port 80) part — turn on Force HTTPS on the default (http) site instead")
+        if ":443" not in (lambda r: r.stdout + r.stderr)(_run(["apache2ctl", "-S"])):
+            raise SiteError("Nothing is serving HTTPS (port 443) yet — enable default-ssl or another HTTPS site first")
+        new = bare[:http.end()] + "\n".join([
+            "", f"    {_FH_BEGIN}", "    RewriteEngine On",
+            "    RewriteCond %{REQUEST_URI} !^/\\.well-known/acme-challenge/",
+            "    RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [R=301,L]", f"    {_FH_END}"]) + bare[http.end():]
+    else:
+        if bare == text:
+            if any(b["https_redirect"] for b in _blocks(text)):
+                raise SiteError(f"The HTTPS redirect in {live} was written by hand — remove it there")
+            return {"ok": True}
+        new = bare
+    if new == text:
+        return {"ok": True}
+    SITE_BAK.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(live, SITE_BAK / f"{conf.name}.{int(time.time())}")
+    if on and not (APACHE / "mods-enabled" / "rewrite.load").exists():
+        _run(["a2enmod", "-q", "rewrite"])
+    live.write_text(new, encoding="utf-8")
+    test = _run(["apache2ctl", "configtest"])
+    if test.returncode != 0:
+        live.write_text(text, encoding="utf-8")
         err = "\n".join(l for l in (test.stderr + test.stdout).splitlines() if "AH00558" not in l).strip()
         raise SiteError("Apache rejected the config, nothing was changed:\n" + err[:1500])
     r = _run(["systemctl", "reload", "apache2"])
