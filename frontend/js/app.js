@@ -5264,7 +5264,7 @@
         actions = [btn("Open System Applications", () => navigate("sysapps"), "btn-primary")];
       } else {
         status = pill("ready", "good");
-        actions = [el("a", { class: "btn btn-sm btn-primary", href: p.path, target: "_blank", rel: "noopener noreferrer", text: "Open phpMyAdmin ↗" })];
+        actions = [el("a", { class: "btn btn-sm btn-primary", href: `${location.protocol}//${location.hostname}${p.path}`, target: "_blank", rel: "noopener noreferrer", text: "Open phpMyAdmin ↗" })];
       }
       return el("div", { class: "card", style: "margin-bottom:16px" }, [
         el("div", { class: "net-card-h" }, [icon("database", 20), el("h3", { text: "phpMyAdmin" }), el("span", { style: "flex:1" }), status]),
@@ -5565,7 +5565,7 @@
         actions = [btn("Allow from my network", () => call(() => API.phppgadminLan(true), "phpPgAdmin is now reachable from your network"), "btn-primary")];
       } else {
         status = pill("ready", "good");
-        actions = [el("a", { class: "btn btn-sm btn-primary", href: p.path, target: "_blank", rel: "noopener noreferrer", text: "Open phpPgAdmin ↗" }),
+        actions = [el("a", { class: "btn btn-sm btn-primary", href: `${location.protocol}//${location.hostname}${p.path}`, target: "_blank", rel: "noopener noreferrer", text: "Open phpPgAdmin ↗" }),
           btn("Limit to this Pi only", () => call(() => API.phppgadminLan(false), "phpPgAdmin now only answers on the Pi itself"), "btn-ghost")];
       }
       return el("div", { class: "card", style: "margin-bottom:16px" }, [
