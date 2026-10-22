@@ -88,6 +88,13 @@ def change_password(new_password: str) -> None:
     save_config(cfg)
 
 
+def rotate_session_secret() -> None:
+    """Invalidate every issued session cookie."""
+    cfg = load_config()
+    cfg["session_secret"] = secrets.token_hex(32)
+    save_config(cfg)
+
+
 def get_prefs() -> dict:
     cfg = load_config()
     return {

@@ -159,8 +159,11 @@ def _auth_log(ok: bool, username: str, request: Request):
 
 
 # Per-IP login throttle (fail2ban still bans at the firewall; this works without it).
+# Each attempt is counted when it STARTS, so a burst of parallel requests can't
+# all slip past the check while the (slow) password hash runs.
 _LOGIN_WINDOW = 15 * 60
 _LOGIN_MAX_FAILS = 10
+_LOGIN_MAX_IPS = 10000
 _login_fails: dict[str, list[float]] = {}
 _login_lock = threading.Lock()
 
@@ -169,25 +172,34 @@ def _client_ip(request: Request) -> str:
     return request.client.host if request.client else "?"
 
 
-def _login_blocked(ip: str) -> int:
-    """Seconds until this IP may try again (0 = allowed)."""
+def _login_begin(ip: str) -> int:
+    """Count one attempt for this IP. Returns seconds to wait if it's over the
+    limit (the attempt is then not counted), else 0."""
     now = time.time()
     with _login_lock:
-        recent = [t for t in _login_fails.get(ip, []) if now - t < _LOGIN_WINDOW]
-        if recent:
-            _login_fails[ip] = recent
-        else:
-            _login_fails.pop(ip, None)
+        recent = [t for t in _login_fails.pop(ip, []) if now - t < _LOGIN_WINDOW]
         if len(recent) >= _LOGIN_MAX_FAILS:
+            _login_fails[ip] = recent
             return int(_LOGIN_WINDOW - (now - recent[0])) + 1
+        recent.append(now)
+        _login_fails[ip] = recent  # re-inserted = most recently used
+        # Bound memory by dropping the least recently used IPs, never the whole table.
+        while len(_login_fails) > _LOGIN_MAX_IPS:
+            _login_fails.pop(next(iter(_login_fails)))
     return 0
 
 
-def _login_failed(ip: str):
+def _login_forgive(ip: str, everything: bool = False):
+    """Take back the attempt counted by _login_begin (right password), or clear
+    the IP entirely (successful login)."""
     with _login_lock:
-        _login_fails.setdefault(ip, []).append(time.time())
-        if len(_login_fails) > 10000:  # don't let a spray of IPs grow this forever
-            _login_fails.clear()
+        recent = _login_fails.get(ip)
+        if not recent:
+            return
+        if everything:
+            _login_fails.pop(ip, None)
+        else:
+            recent.pop()
 
 
 def _is_https(request: Request) -> bool:
@@ -208,23 +220,22 @@ def _set_session(resp: JSONResponse, request: Request, username: str):
 @app.post("/api/login")
 def api_login(body: LoginBody, request: Request):
     ip = _client_ip(request)
-    wait = _login_blocked(ip)
+    wait = _login_begin(ip)
     if wait:
         raise HTTPException(status_code=429, detail=f"Too many failed logins. Try again in {(wait + 59) // 60} min.")
     if not config.verify_credentials(body.username, body.password):
-        _login_failed(ip)
         _auth_log(False, body.username, request)
         raise HTTPException(status_code=401, detail="Invalid credentials")
     if twofa.is_enabled():
         if not body.otp:
+            # Right password, code still to come: don't count this one.
+            _login_forgive(ip)
             # Signal the frontend to prompt for a 2FA code.
             raise HTTPException(status_code=401, detail="otp_required")
         if not twofa.verify_login(body.otp):
-            _login_failed(ip)
             _auth_log(False, body.username, request)
             raise HTTPException(status_code=401, detail="Invalid 2FA code")
-    with _login_lock:
-        _login_fails.pop(ip, None)
+    _login_forgive(ip, everything=True)
     _auth_log(True, body.username, request)
     resp = JSONResponse({"ok": True, "username": body.username})
     _set_session(resp, request, body.username)
@@ -942,10 +953,15 @@ def api_2fa_enroll(user: str = auth.CurrentUser):
 
 
 @app.post("/api/2fa/enable")
-def api_2fa_enable(body: OtpBody, user: str = auth.CurrentUser):
+def api_2fa_enable(body: OtpBody, request: Request, user: str = auth.CurrentUser):
     if not twofa.confirm_enable(body.code):
         raise HTTPException(status_code=400, detail="Invalid or expired code")
-    return {"ok": True, "enabled": True}
+    # Sessions opened without 2FA shouldn't outlive turning it on: sign them
+    # all out and give this browser a fresh cookie.
+    config.rotate_session_secret()
+    resp = JSONResponse({"ok": True, "enabled": True})
+    _set_session(resp, request, config.get_prefs()["username"])
+    return resp
 
 
 @app.post("/api/2fa/disable")
