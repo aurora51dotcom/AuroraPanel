@@ -71,7 +71,8 @@ if [ $UNINSTALL = 1 ]; then
   OLD_PORT=""
   [ -f "$UNIT" ] && OLD_PORT="$(sed -n 's/^Environment=PORT=\([0-9]*\).*/\1/p' "$UNIT" | head -n1)"
   systemctl disable --now "$SERVICE" 2>/dev/null || true
-  rm -f "$UNIT"
+  rm -f "$UNIT" "/etc/systemd/system/${SERVICE}.service.d/aurora-https.conf" "/etc/letsencrypt/renewal-hooks/deploy/${SERVICE}-restart"
+  rmdir "/etc/systemd/system/${SERVICE}.service.d" 2>/dev/null || true
   systemctl daemon-reload
   systemctl reset-failed "$SERVICE" 2>/dev/null || true
   ok "Service removed"
@@ -222,9 +223,12 @@ fi
 
 # --- health check -----------------------------------------------------------
 say "Waiting for AuroraPanel to start"
+# Panel HTTPS (Security page) is a drop-in that this unit rewrite leaves in place.
+SCHEME=http
+grep -qs '^Environment=UVICORN_SSL_CERTFILE=' "/etc/systemd/system/${SERVICE}.service.d/aurora-https.conf" && SCHEME=https
 UP=0
 for _ in $(seq 1 30); do
-  if curl -fs -o /dev/null "http://127.0.0.1:${PORT}/"; then UP=1; break; fi
+  if curl -fsk -o /dev/null "${SCHEME}://127.0.0.1:${PORT}/"; then UP=1; break; fi
   sleep 1
 done
 if [ $UP = 0 ]; then
@@ -239,8 +243,8 @@ echo
 echo "${c_hi}  AuroraPanel is installed!${c_off}"
 echo
 echo "  Open it from a browser on your network:"
-for ip in $IPS; do echo "    http://${ip}:${PORT}"; done
-echo "    http://$(hostname).local:${PORT}"
+for ip in $IPS; do echo "    ${SCHEME}://${ip}:${PORT}"; done
+echo "    ${SCHEME}://$(hostname).local:${PORT}"
 echo
 if [ ! -f "$APP_DIR/aurora_config.json" ]; then
   echo "  First visit: you'll be asked to create your admin account."

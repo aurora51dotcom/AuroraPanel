@@ -147,6 +147,10 @@ const API = (() => {
     twofaEnroll: () => request("POST", "/api/2fa/enroll"),
     twofaEnable: (code) => request("POST", "/api/2fa/enable", { code }),
     twofaDisable: (code) => request("POST", "/api/2fa/disable", { code }),
+    panelHttps: () => request("GET", "/api/panel/https"),
+    panelHttpsEnable: (source, regenerate) => request("POST", "/api/panel/https/enable", { source, regenerate }),
+    panelHttpsConfirm: () => request("POST", "/api/panel/https/confirm"),
+    panelHttpsDisable: () => request("POST", "/api/panel/https/disable"),
 
     // ssh access
     sshStatus: () => request("GET", "/api/ssh/status"),

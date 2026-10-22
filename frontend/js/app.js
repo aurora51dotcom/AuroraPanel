@@ -349,7 +349,7 @@
   }
   function runCmdk(c) {
     closeCmdk();
-    if (c.ext) window.open(`${location.protocol}//${location.hostname}${c.ext}`, "_blank");
+    if (c.ext) window.open(`http://${location.hostname}${c.ext}`, "_blank");
     else navigate(c.view);
   }
   document.addEventListener("keydown", (e) => {
@@ -443,6 +443,12 @@
     $("#app-shell").hidden = false;
     $("#user-label").textContent = username;
     state.meReady = API.me().then((m) => { state.sysUser = m.system_user; state.sysHome = m.home; }).catch(() => {});
+    // Just switched the panel to HTTPS: reaching it over https:// is the proof
+    // that stops the automatic revert to HTTP.
+    if (location.protocol === "https:") {
+      API.panelHttps().then((st) => st.pending && API.panelHttpsConfirm()
+        .then(() => toast("Panel HTTPS is on — bookmark this https:// address", "good"))).catch(() => {});
+    }
     initTheme();
     decorateNav();
     setupNav();
@@ -1059,7 +1065,7 @@
         const ico = el("span", { class: "tile-ico", style: `background:${tint}; color:${c}` }, icon(t.icon, 19));
         const tile = el("button", { class: `tile ${t.ext ? "ext" : ""}`, style: `--tile-accent:${c}`,
           onclick: () => {
-            if (t.ext) window.open(`${location.protocol}//${location.hostname}${t.ext}`, "_blank");
+            if (t.ext) window.open(`http://${location.hostname}${t.ext}`, "_blank");
             else navigate(t.view);
           } }, [
           ico,
@@ -3071,8 +3077,95 @@
           ]),
         ]);
         body.append(card);
+        body.append(await httpsCard());
       });
     };
+
+    // ---- Panel HTTPS (the panel's own port) ----
+    const panelUrl = (proto, host, port) => `${proto}//${host || location.hostname}:${port || location.port}/`;
+    // Go to `url` once this page's server has gone down for its restart (the new
+    // address can't be probed: a self-signed cert or mixed content blocks fetch).
+    async function moveWhenRestarted(url) {
+      const t0 = Date.now();
+      while (Date.now() - t0 < 30000) {
+        await new Promise((r) => setTimeout(r, 1000));
+        try { await fetch("/api/status", { cache: "no-store" }); } catch (e) { break; }
+      }
+      setTimeout(() => { location.href = url; }, 3000);
+    }
+    async function httpsCard() {
+      let st;
+      try { st = await API.panelHttps(); }
+      catch (e) { return el("div", { class: "card" }, [el("h3", { text: "Panel HTTPS" }), el("p", { class: "muted", text: e.message })]); }
+      const pill = st.enabled
+        ? el("span", { class: `pill ${st.pending ? "warn" : "good"}`, text: st.pending ? "waiting for confirmation" : "on" })
+        : el("span", { class: "pill bad", text: "off — plain HTTP" });
+      const rows = [
+        el("h3", { text: "Panel HTTPS" }),
+        el("p", { class: "muted", style: "margin:0 0 14px",
+          text: "Encrypts everything between your browser and this panel, including your password and login cookie. Without it, anyone on the same network can read them." }),
+        el("div", { style: "display:flex;align-items:center;gap:12px;flex-wrap:wrap" }, [
+          pill,
+          st.enabled
+            ? el("button", { class: "btn btn-sm", text: "Turn off", onclick: () => disableHttps(st) })
+            : el("button", { class: "btn btn-sm btn-primary", text: "Turn on HTTPS", onclick: () => enableHttps(st) }),
+          st.enabled && st.source === "self"
+            ? el("button", { class: "btn btn-sm", text: "New certificate", title: "Regenerate for the current hostname and IP addresses",
+                onclick: () => enableHttps(st, "self", true) }) : null,
+        ].filter(Boolean)),
+      ];
+      if (st.enabled && st.cert) {
+        rows.push(el("p", { class: "muted", style: "margin:12px 0 0;font-size:13px",
+          text: `${st.source === "self" ? "Self-signed certificate" : `Let's Encrypt: ${st.source}`} · valid for ${st.cert.names.join(", ")} · expires ${st.cert.expires}` }));
+      }
+      if (st.enabled && !st.active) {
+        rows.push(el("p", { style: "margin:12px 0 0" }, [
+          el("a", { href: panelUrl("https:", null, st.port), text: `Open ${panelUrl("https:", null, st.port)}` })]));
+      }
+      return el("div", { class: "card", style: "margin-top:16px" }, rows);
+    }
+
+    function enableHttps(st, source, regenerate) {
+      const choice = el("select", { id: "https-src" }, [
+        el("option", { value: "self", text: "Self-signed certificate (works on any LAN)" }),
+        ...st.letsencrypt.map((d) => el("option", { value: d, text: `Let's Encrypt — ${d}` })),
+      ]);
+      const content = el("div", {}, [
+        source ? null : el("label", { style: "display:flex;flex-direction:column;gap:6px;margin-bottom:12px" }, ["Certificate", choice]),
+        el("p", { class: "muted", text: `The panel will restart and move to https://…:${st.port}. Plain http:// on that port stops working, so update your bookmark.` }),
+        el("p", { class: "muted", text: "With a self-signed certificate your browser warns once (\"Not private\"): choose Advanced → Proceed. The connection is still encrypted." }),
+        el("p", { class: "muted", text: "Safety net: if the panel isn't reached over HTTPS within 3 minutes, it switches back to HTTP by itself." }),
+      ].filter(Boolean));
+      openModal(regenerate ? "New panel certificate" : "Turn on panel HTTPS", content, [
+        el("button", { class: "btn btn-primary", text: regenerate ? "Regenerate & restart" : "Turn on & restart", onclick: async (ev) => {
+          const src = source || choice.value;
+          ev.target.disabled = true;
+          try {
+            const r = await API.panelHttpsEnable(src, !!regenerate);
+            closeModal();
+            const url = panelUrl("https:", r.host, r.port) + location.hash;
+            toast("Restarting the panel on HTTPS…", "good");
+            moveWhenRestarted(url);
+          } catch (e) { ev.target.disabled = false; toast(e.message, "bad"); }
+        } }),
+      ]);
+    }
+
+    function disableHttps(st) {
+      openModal("Turn off panel HTTPS", el("p", { class: "muted",
+        text: `The panel will restart on plain http://…:${st.port}. Your password and login cookie will travel unencrypted again.` }), [
+        el("button", { class: "btn btn-danger", text: "Turn off & restart", onclick: async (ev) => {
+          ev.target.disabled = true;
+          try {
+            const r = await API.panelHttpsDisable();
+            closeModal();
+            toast("Restarting the panel on HTTP…", "good");
+            moveWhenRestarted(panelUrl("http:", null, r.port) + location.hash);
+          } catch (e) { ev.target.disabled = false; toast(e.message, "bad"); }
+        } }),
+      ]);
+    }
+
     async function enroll2fa() {
       try {
         const d = await API.twofaEnroll();
@@ -5264,7 +5357,7 @@
         actions = [btn("Open System Applications", () => navigate("sysapps"), "btn-primary")];
       } else {
         status = pill("ready", "good");
-        actions = [el("a", { class: "btn btn-sm btn-primary", href: `${location.protocol}//${location.hostname}${p.path}`, target: "_blank", rel: "noopener noreferrer", text: "Open phpMyAdmin ↗" })];
+        actions = [el("a", { class: "btn btn-sm btn-primary", href: `http://${location.hostname}${p.path}`, target: "_blank", rel: "noopener noreferrer", text: "Open phpMyAdmin ↗" })];
       }
       return el("div", { class: "card", style: "margin-bottom:16px" }, [
         el("div", { class: "net-card-h" }, [icon("database", 20), el("h3", { text: "phpMyAdmin" }), el("span", { style: "flex:1" }), status]),
@@ -5565,7 +5658,7 @@
         actions = [btn("Allow from my network", () => call(() => API.phppgadminLan(true), "phpPgAdmin is now reachable from your network"), "btn-primary")];
       } else {
         status = pill("ready", "good");
-        actions = [el("a", { class: "btn btn-sm btn-primary", href: `${location.protocol}//${location.hostname}${p.path}`, target: "_blank", rel: "noopener noreferrer", text: "Open phpPgAdmin ↗" }),
+        actions = [el("a", { class: "btn btn-sm btn-primary", href: `http://${location.hostname}${p.path}`, target: "_blank", rel: "noopener noreferrer", text: "Open phpPgAdmin ↗" }),
           btn("Limit to this Pi only", () => call(() => API.phppgadminLan(false), "phpPgAdmin now only answers on the Pi itself"), "btn-ghost")];
       }
       return el("div", { class: "card", style: "margin-bottom:16px" }, [

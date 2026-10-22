@@ -24,7 +24,7 @@ or the [Raspberry Pi Forums thread](https://forums.raspberrypi.com/viewtopic.php
 | **Network** | VPN servers — **WireGuard** (QR codes), **OpenVPN** (per-user logins: certificate + password, password only or certificate only) and **IPsec/IKEv2** (native on iPhone/Mac/Windows) — each with an end-to-end self-test. Dynamic DNS (DuckDNS, No-IP, Dynu, deSEC, Cloudflare, FreeDNS, custom). Port Checker (outside probe, double-NAT/CGNAT detection, router instructions, UPnP). Network Monitor (who tried to connect). IP Blocker & Trust (ban IPs/ranges with expiry, trusted list). Fail2ban. Interfaces & Wi-Fi with confirm-or-revert. |
 | **Databases** | MariaDB and PostgreSQL databases and users, wizards, phpMyAdmin link. |
 | **Domains** | Apache virtual hosts (Force HTTPS, Let's Encrypt), redirects, BIND zone editor. |
-| **Security** | fail2ban jails (SSH, panel, OpenVPN, FTP, Apache, Nginx, MariaDB, port scans, repeat offenders), SSH keys, SSL/TLS, ModSecurity, hotlink protection, API tokens, TOTP two-factor login. |
+| **Security** | fail2ban jails (SSH, panel, OpenVPN, FTP, Apache, Nginx, MariaDB, port scans, repeat offenders), SSH keys, SSL/TLS, ModSecurity, hotlink protection, API tokens, TOTP two-factor login, panel HTTPS. |
 | **Files** | File manager (upload, edit, zip, recycle bin), Images (thumbnails, resize, WebP), Directory Privacy (password-protected folders), Disk & Inodes usage, Web Disk (WebDAV), FTP accounts (locked to a folder; full / read-only / upload-only), Backup + Backup Wizard (files and databases, selective restore), Git Version Control (clone, pull, deploy, deploy keys). |
 | **Advanced** | Browser terminal, cron wizard, `.htaccess` tools, ClamAV virus scanner, DNS tracing. |
 | **Software** | One-click Apache / Nginx / Lighttpd / Caddy / PHP-FPM / MariaDB / vsftpd, each with a settings page, config editor (validated, auto-rollback) and logs; PHP settings and extensions; App Manager; WordPress installer. |
@@ -92,9 +92,14 @@ to re-run first-time setup.
 
 ## Security notes
 
-- **Put it behind your LAN / VPN.** There's no HTTPS built in — reach it from
-  outside through the built-in WireGuard/OpenVPN server, or front it with a
-  reverse proxy (Caddy / nginx) if you must expose it.
+- **Turn on Panel HTTPS** (Security page) so your password and session cookie
+  are encrypted on the network. It uses a self-signed certificate (or a Let's
+  Encrypt one you already have) and switches back to HTTP by itself if the
+  browser doesn't reach the new https:// address within 3 minutes.
+- **Put it behind your LAN / VPN.** Reach it from outside through the built-in
+  WireGuard/OpenVPN server rather than forwarding the panel port.
+- Failed logins are throttled per IP (10 per 15 minutes) on top of fail2ban;
+  changing the password or turning on 2FA signs out every other session.
 - A strict Content-Security-Policy is sent with every page, and untrusted text
   (log lines, usernames from failed logins) is only ever rendered as text.
 - The file manager is confined to `AURORA_FILE_ROOT` and rejects `..`/symlink

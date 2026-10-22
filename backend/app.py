@@ -27,7 +27,7 @@ from . import (
     apps, databases, diskusage, dnszones, domains, fail2ban, netmgr, sites, files, firewall, ipblocker, jobs,
     modsecurity, netdiag, packages, perms, phpmgr, services, sslcerts, sshaccess,
     sysapps, system_info, terminal, twofa, users,
-    appconfig, ddns, ftp, gitvc, guard, images, ipsec, webaccess, netmon, openvpn, phpsettings, portcheck, version, vpncommon, wireguard,
+    appconfig, ddns, ftp, gitvc, guard, images, ipsec, webaccess, netmon, openvpn, panelhttps, phpsettings, portcheck, version, vpncommon, wireguard,
 )
 
 # The API schema is a full map of every endpoint, so it's off unless asked for.
@@ -969,6 +969,37 @@ def api_2fa_disable(body: OtpBody, user: str = auth.CurrentUser):
     if not twofa.disable(body.code):
         raise HTTPException(status_code=400, detail="Invalid code")
     return {"ok": True, "enabled": False}
+
+
+class PanelHttpsBody(BaseModel):
+    source: str = "self"
+    regenerate: bool = False
+
+
+@app.get("/api/panel/https")
+def api_panel_https(request: Request, user: str = auth.CurrentUser):
+    return panelhttps.status(request.url.scheme)
+
+
+@app.post("/api/panel/https/enable")
+def api_panel_https_enable(body: PanelHttpsBody, user: str = auth.CurrentUser):
+    try:
+        return panelhttps.enable(body.source, body.regenerate)
+    except panelhttps.PanelHttpsError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/panel/https/confirm")
+def api_panel_https_confirm(request: Request, user: str = auth.CurrentUser):
+    try:
+        return panelhttps.confirm(request.url.scheme)
+    except panelhttps.PanelHttpsError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/api/panel/https/disable")
+def api_panel_https_disable(user: str = auth.CurrentUser):
+    return panelhttps.disable()
 
 
 # --------------------------------------------------------------------------- #
