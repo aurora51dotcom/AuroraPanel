@@ -140,7 +140,7 @@
     packages: "packages", network: "network", firewall: "firewall", users: "users",
     mysql: "database", mysqlwiz: "wizard", pgsql: "database", pgwiz: "wizard",
     vhosts: "globe", redirects: "redirect", zones: "zone", dyndns: "refresh",
-    ssh: "key", ipblocker: "ban", ssl: "lock", tokens: "token", hotlink: "link",
+    ssh: "key", ipblocker: "ban", ssl: "lock", panelhttps: "lock", tokens: "token", hotlink: "link",
     leech: "trap", modsec: "brick", security: "phone", fixperms: "home", virus: "virus",
     files: "folder", disk: "disk", backups: "backup", cron: "cron", indexes: "indexes",
     errorpages: "error", handlers: "handler", mime: "mime", dns: "dns",
@@ -489,7 +489,7 @@
   const TITLES = {
     dashboard: "Dashboard", terminal: "Terminal", services: "Services", processes: "Processes",
     packages: "Packages", cron: "Cron Jobs", files: "File Manager", disk: "Disk Usage",
-    backups: "Backups", network: "Interfaces & Wi-Fi", firewall: "Firewall", users: "Users", security: "Security",
+    backups: "Backups", network: "Interfaces & Wi-Fi", firewall: "Firewall", users: "Users", security: "Security", panelhttps: "Panel HTTPS",
     indexes: "Indexes", mime: "MIME Types", errorpages: "Error Pages", handlers: "Apache Handlers",
     virus: "Virus Scanner", dns: "Track DNS",
     ssh: "SSH Access", ipblocker: "IP Blocker & Trust", ssl: "SSL/TLS Certificates", tokens: "Manage API Tokens",
@@ -568,6 +568,7 @@
       firewall: viewFirewall,
       users: viewUsers,
       security: viewSecurity,
+      panelhttps: (root) => viewSecurity(root, "https"),
       indexes: viewIndexes,
       mime: viewMime,
       errorpages: viewErrorPages,
@@ -655,6 +656,7 @@
     { name: "Security", icon: "shield", tiles: [
       { label: "SSH Access", icon: "key", view: "ssh" },
       { label: "IP Blocker & Trust", icon: "ban", view: "ipblocker" },
+      { label: "Panel HTTPS", icon: "lock", view: "panelhttps" },
       { label: "SSL/TLS Certificates", icon: "lock", view: "ssl" },
       { label: "Manage API Tokens", icon: "token", view: "tokens" },
       { label: "Hotlink Protection", icon: "link", view: "hotlink" },
@@ -3058,11 +3060,18 @@
   // ======================================================================
   //  Security (2FA)
   // ======================================================================
-  function viewSecurity(root) {
+  function viewSecurity(root, only) {
     const body = el("div", { id: "sec-body" }, el("div", { class: "loading", text: "Loading…" }));
     root.append(body);
     const load = async () => {
       await guardedLoad(async () => {
+        if (only === "https") {
+          const c = await httpsCard();
+          c.style.marginTop = "0";
+          body.innerHTML = "";
+          body.append(c);
+          return;
+        }
         const st = await API.twofaStatus();
         body.innerHTML = "";
         const card = el("div", { class: "card" }, [
