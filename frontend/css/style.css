@@ -183,6 +183,7 @@ select option { background: var(--glass-solid); }
 .view-root > *:nth-child(2) { animation-delay: .04s; }
 .view-root > *:nth-child(3) { animation-delay: .08s; }
 .view-root > *:nth-child(n+4) { animation-delay: .12s; }
+.view-root > .dm-savebar { animation: none; }   /* viewIn's fill would pin transform and keep the bar on screen */
 @keyframes viewIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
 
 /* =================== Bento dashboard =================== */

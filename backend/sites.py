@@ -13,6 +13,7 @@ back so a bad setting can never take Apache down.
 """
 from __future__ import annotations
 
+import ipaddress
 import json
 import platform
 import re
@@ -117,6 +118,9 @@ def _settings_from_conf(path: Path) -> dict:
 
 
 def _conf_for(name: str) -> Path | None:
+    # System sites are addressed by conf file: 000-default and default-ssl often share one ServerName.
+    if name in SYSTEM_CONFS and (AVAIL / name).is_file():
+        return AVAIL / name
     name = name.lower()
     for f in sorted(AVAIL.glob("*.conf")):
         try:
@@ -124,6 +128,13 @@ def _conf_for(name: str) -> Path | None:
                 if (b["server_name"] or "").lower() == name:
                     return f
         except OSError:
+            continue
+    # Confs without a ServerName (stock default-ssl.conf) are listed under their file stem.
+    for f in sorted(AVAIL.glob("*.conf")):
+        try:
+            if f.stem.lower() == name and _settings_from_conf(f)["server_name"].lower() == name:
+                return f
+        except (SiteError, OSError):
             continue
     return None
 
@@ -181,17 +192,30 @@ def _slug(name: str) -> str:
     return name.lower().replace("*", "wildcard")
 
 
+def _is_ip(name: str) -> bool:
+    try:
+        return isinstance(ipaddress.ip_address(name), ipaddress.IPv4Address)
+    except ValueError:
+        return False
+
+
 def _clean(settings: dict) -> dict:
     s = {**DEFAULTS, **{k: v for k, v in (settings or {}).items() if k in DEFAULTS}}
     s["server_name"] = (s["server_name"] or "").strip().lower()
-    if not _HOST.match(s["server_name"]):
-        raise SiteError("Enter a valid domain, e.g. example.com")
+    ip = _is_ip(s["server_name"])
+    if not (ip or _HOST.match(s["server_name"])):
+        raise SiteError("Enter a valid domain or IPv4 address, e.g. example.com or 192.168.0.100")
+    if ip:
+        if s["www"] != "none":
+            raise SiteError("www handling doesn't apply to an IP address")
+        if s["ssl"] == "letsencrypt":
+            raise SiteError("Let's Encrypt can't issue certificates for an IP — use self-signed instead")
     aliases = []
     for a in s["aliases"] or []:
         a = str(a).strip().lower()
         if not a or a == s["server_name"] or a in aliases:
             continue
-        if not _HOST.match(a):
+        if not (_HOST.match(a) or _is_ip(a)):
             raise SiteError(f"Invalid alias: {a}")
         aliases.append(a)
     bare = s["server_name"][4:] if s["server_name"].startswith("www.") else s["server_name"]
@@ -330,7 +354,7 @@ def _ensure_selfsigned(s: dict) -> None:
     if Path(crt).exists() and Path(key).exists():
         return
     SSL_DIR.mkdir(parents=True, exist_ok=True)
-    san = ",".join(f"DNS:{n}" for n in [s["server_name"], *s["aliases"]])
+    san = ",".join(f"{'IP' if _is_ip(n) else 'DNS'}:{n}" for n in [s["server_name"], *s["aliases"]])
     r = _run(["openssl", "req", "-x509", "-nodes", "-newkey", "rsa:2048", "-days", "825",
               "-keyout", key, "-out", crt, "-subj", f"/CN={s['server_name']}", "-addext", f"subjectAltName={san}"], 60)
     if r.returncode != 0:
@@ -436,11 +460,43 @@ def quick_toggle(name: str, key: str, value: bool) -> dict:
     if key not in ("force_https", "enabled", "maintenance"):
         raise SiteError("Unsupported toggle")
     cur = get_site(name)
+    if cur["system"]:
+        if key != "enabled":
+            raise SiteError("System default sites can only be enabled or disabled")
+        return _set_system_enabled(AVAIL / cur["conf"], bool(value))
     s = cur["settings"]
     if key == "force_https" and value and s["ssl"] == "none":
         s["ssl"] = "selfsigned"   # needs *a* cert; upgrade to Let's Encrypt from Manage
     s[key] = bool(value)
     return save_site(name, s)
+
+
+def _set_system_enabled(conf: Path, enabled: bool) -> dict:
+    """a2ensite/a2dissite a stock conf without touching its contents."""
+    link = ENABLED / conf.name
+    was_enabled = link.exists()
+    if enabled == was_enabled:
+        return {"ok": True}
+    if link.exists() and not link.is_symlink():
+        raise SiteError(f"sites-enabled/{conf.name} is a regular file (edited by hand), not a link to sites-available, "
+                        "so the panel won't remove it. Move it out of sites-enabled yourself to disable the site.")
+    if enabled:
+        if "SSLEngine" in conf.read_text(errors="replace") and not (APACHE / "mods-enabled" / "ssl.load").exists():
+            _run(["a2enmod", "-q", "ssl"])
+        r = _run(["a2ensite", "-q", conf.name])
+    else:
+        r = _run(["a2dissite", "-q", conf.name])
+    if r.returncode != 0 or link.exists() != enabled:
+        raise SiteError((r.stderr + r.stdout).strip() or f"Could not {'enable' if enabled else 'disable'} {conf.name}")
+    test = _run(["apache2ctl", "configtest"])
+    if test.returncode != 0:
+        _run(["a2dissite" if enabled else "a2ensite", "-q", conf.name])
+        err = "\n".join(l for l in (test.stderr + test.stdout).splitlines() if "AH00558" not in l).strip()
+        raise SiteError("Apache rejected the config, nothing was changed:\n" + err[:1500])
+    r = _run(["systemctl", "reload", "apache2"])
+    if r.returncode != 0:
+        _run(["systemctl", "restart", "apache2"])
+    return {"ok": True}
 
 
 def remove_site(name: str) -> dict:
@@ -471,7 +527,9 @@ def issue_letsencrypt(name: str, email: str, include_aliases: bool = True) -> jo
     if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email or ""):
         raise SiteError("A valid email is required for Let's Encrypt expiry notices")
     s = get_site(name)["settings"]
-    names = [s["server_name"]] + ([a for a in s["aliases"] if not a.startswith("*")] if include_aliases else [])
+    if _is_ip(s["server_name"]):
+        raise SiteError("Let's Encrypt can't issue certificates for an IP address")
+    names = [s["server_name"]] + ([a for a in s["aliases"] if not a.startswith("*") and not _is_ip(a)] if include_aliases else [])
     argv = ["certbot", "certonly", "--webroot", "-w", s["docroot"], "--non-interactive", "--agree-tos",
             "-m", email, "--keep-until-expiring", "--cert-name", s["server_name"]]
     for n in names:

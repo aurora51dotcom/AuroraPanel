@@ -3865,6 +3865,8 @@
     if (opts.disabled) input.disabled = true;
     return el("label", { class: `sw ${opts.disabled ? "disabled" : ""}`, title: opts.title || "" }, [input, el("span", { class: "sw-track" }, el("span", { class: "sw-knob" }))]);
   }
+  const isIp = (n) => /^(25[0-5]|2[0-4]\d|1?\d?\d)(\.(25[0-5]|2[0-4]\d|1?\d?\d)){3}$/.test(n || "");
+
   function sslPill(s) {
     if (s.ssl === "none") return el("span", { class: "pill dim", text: "No SSL" });
     const label = { selfsigned: "Self-signed", letsencrypt: "Let's Encrypt", custom: "Custom cert" }[s.ssl] || s.ssl;
@@ -3927,10 +3929,10 @@
           }, { disabled: s.system, title: s.system ? "System site" : "Redirect all HTTP traffic to HTTPS" })),
           el("td", {}, sslPill(s)),
           el("td", { class: "actions" }, [
-            el("button", { class: "btn btn-sm", onclick: () => openDomain(s.server_name) }, [icon("services", 13), " Manage"]),
-            el("button", { class: "btn btn-sm btn-ghost", title: "DNS zone", onclick: () => openZone(s.server_name.replace(/^www\./, "")) }, [icon("zone", 13), " Zone"]),
-            el("button", { class: "btn btn-sm btn-ghost", title: "DNS & WHOIS check", onclick: () => showDomainInfo(s.server_name) }, icon("search", 13)),
-          ]),
+            el("button", { class: "btn btn-sm", onclick: () => openDomain(s.system ? s.conf : s.server_name) }, [icon("services", 13), " Manage"]),
+            isIp(s.server_name) ? null : el("button", { class: "btn btn-sm btn-ghost", title: "DNS zone", onclick: () => openZone(s.server_name.replace(/^www\./, "")) }, [icon("zone", 13), " Zone"]),
+            isIp(s.server_name) ? null : el("button", { class: "btn btn-sm btn-ghost", title: "DNS & WHOIS check", onclick: () => showDomainInfo(s.server_name) }, icon("search", 13)),
+          ].filter(Boolean)),
         ]);
       });
       body.append(el("div", { class: "dm-count muted", text: `Displaying ${list.length} of ${data.sites.length} domain${data.sites.length === 1 ? "" : "s"}` }));
@@ -3961,28 +3963,30 @@
   function createDomainModal() {
     const f = el("div", { class: "dm-form" });
     f.innerHTML = `
-      <label class="cw-lbl">Domain<input id="nd-name" type="text" placeholder="example.com" autocomplete="off" /></label>
+      <label class="cw-lbl">Domain or IP address<input id="nd-name" type="text" placeholder="example.com or 192.168.0.100" autocomplete="off" /></label>
       <label class="cw-lbl">Document root<input id="nd-root" type="text" placeholder="/var/www/example.com" /></label>
       <label class="dm-check"><input id="nd-www" type="checkbox" checked /> Also answer on <b id="nd-www-l">www.example.com</b></label>
       <label class="dm-check"><input id="nd-ssl" type="checkbox" /> Create a self-signed certificate &amp; force HTTPS <span class="muted">(switch to Let's Encrypt later)</span></label>
       <label class="dm-check"><input id="nd-zone" type="checkbox" /> Create a DNS zone for it in the Zone Editor</label>
-      <p class="muted" style="font-size:12px;margin:4px 0 0">Local names like <code>mysite.test</code> work too — you'll get the hosts-file line to add on your computer.</p>`;
+      <p class="muted" style="font-size:12px;margin:4px 0 0">Local names like <code>mysite.test</code> work too — you'll get the hosts-file line to add on your computer. No domain? Enter this Pi's IP to serve a folder at <code>http://&lt;ip&gt;/</code>.</p>`;
     const name = $("#nd-name", f), rootIn = $("#nd-root", f);
     name.addEventListener("input", () => {
       const n = name.value.trim().toLowerCase() || "example.com";
       rootIn.placeholder = `/var/www/${n}`;
       $("#nd-www-l", f).textContent = n.startsWith("www.") ? n.slice(4) : "www." + n;
+      const ip = isIp(n);
+      ["#nd-www", "#nd-zone"].forEach((id) => { const c = $(id, f); c.disabled = ip; if (ip) c.checked = false; c.parentElement.classList.toggle("dm-dim", ip); });
     });
     const go = el("button", { class: "btn btn-primary", text: "Create domain", onclick: async () => {
       const n = name.value.trim().toLowerCase();
       if (!n) return toast("Enter a domain", "bad");
       const ssl = $("#nd-ssl", f).checked;
-      const settings = { server_name: n, docroot: rootIn.value.trim(), aliases: $("#nd-www", f).checked ? [n.startsWith("www.") ? n.slice(4) : "www." + n] : [],
+      const settings = { server_name: n, docroot: rootIn.value.trim(), aliases: $("#nd-www", f).checked && !isIp(n) ? [n.startsWith("www.") ? n.slice(4) : "www." + n] : [],
         ssl: ssl ? "selfsigned" : "none", force_https: ssl };
       go.disabled = true;
       try {
         const r = await API.siteCreate(settings);
-        if ($("#nd-zone", f).checked) { try { await API.dnsZoneCreate(n.replace(/^www\./, ""), "", "default"); } catch (e) { toast("Zone: " + e.message, "bad"); } }
+        if ($("#nd-zone", f).checked && !isIp(n)) { try { await API.dnsZoneCreate(n.replace(/^www\./, ""), "", "default"); } catch (e) { toast("Zone: " + e.message, "bad"); } }
         closeModal(); toast(`Created ${r.server_name}`, "good"); openDomain(r.server_name);
       } catch (e) { toast(e.message, "bad"); go.disabled = false; }
     } });
@@ -4006,6 +4010,7 @@
       const orig = JSON.stringify(d.settings);
       const s = JSON.parse(orig);
       const ro = d.system;
+      const ipSite = isIp(d.settings.server_name);
       root.innerHTML = "";
       const dirty = () => { const x = JSON.stringify(s) !== orig; saveBar.classList.toggle("show", x && !ro); };
 
@@ -4016,7 +4021,12 @@
         el("a", { class: "btn btn-sm", href: `${d.settings.ssl !== "none" ? "https" : "http"}://${d.settings.server_name}/`, target: "_blank", rel: "noopener" }, [icon("link", 13), " Visit site"]),
       ]);
       root.append(head);
-      if (ro) root.append(el("div", { class: "dm-note warn" }, [icon("lock", 15), el("span", { text: "This is a system default site (" + d.conf + "). It's shown read-only so the panel never breaks Apache's fallback site." })]));
+      if (ro) root.append(el("div", { class: "dm-note warn" }, [icon("lock", 15), el("span", { text: "This is a system default site (" + d.conf + "). Its settings are read-only so the panel never breaks Apache's fallback site, but you can turn it on or off." }),
+        el("button", { class: "btn btn-sm", style: "margin-left:auto;flex-shrink:0", text: d.enabled ? "Disable site" : "Enable site", onclick: async (e) => {
+          e.target.disabled = true;
+          try { await API.siteToggle(d.conf, "enabled", !d.enabled); toast(`${d.settings.server_name} ${d.enabled ? "disabled" : "enabled"}`, "good"); load(); }
+          catch (err) { toast(err.message, "bad"); e.target.disabled = false; }
+        } })]));
       else if (!d.managed) root.append(el("div", { class: "dm-note" }, [icon("error", 15), el("span", { html: `This site uses a hand-written config (<code>${esc(d.conf)}</code>). Settings below were read from it — saving once lets AuroraPanel manage it, and the original is kept as <code>${esc(d.conf)}.aurora-bak</code>.` })]));
 
       const left = el("div", { class: "dmm-left" }), right = el("div", { class: "dmm-right" });
@@ -4057,7 +4067,7 @@
       left.append(card("globe", "Update the domain", "Where the files live and which names this site answers on.",
         field("Document root", text("docroot", "/var/www/" + s.server_name), "Apache serves files from this folder. It's created if missing."),
         el("div", { class: "cw-lbl" }, ["Aliases", chips, el("span", { class: "dm-hint", text: "Extra hostnames for this site — press Enter after each." })]),
-        el("div", { class: "cw-lbl" }, ["www handling", seg("www", [["none", "Leave as is"], ["force_www", "Always www"], ["force_bare", "Never www"]]),
+        ipSite ? null : el("div", { class: "cw-lbl" }, ["www handling", seg("www", [["none", "Leave as is"], ["force_www", "Always www"], ["force_bare", "Never www"]]),
           el("span", { class: "dm-hint", text: "Pick one canonical address so search engines don't see duplicates (301 redirect)." })]),
         toggleRow("enabled", "Site enabled", "Turn off to take the site offline without deleting anything."),
       ));
@@ -4113,7 +4123,7 @@
       ]);
       const syncHttps = () => httpsToggles.classList.toggle("dm-dim", s.ssl === "none");
       left.append(card("lock", "HTTPS / SSL", "Encrypt traffic and choose where the certificate comes from.",
-        seg("ssl", [["none", "None"], ["selfsigned", "Self-signed"], ["letsencrypt", "Let's Encrypt"], ["custom", "Custom"]], (v) => { if (v === "none") { s.force_https = false; s.hsts = false; httpsToggles.querySelectorAll(".sw-in").forEach((i) => { i.checked = false; }); } drawSsl(); syncHttps(); }),
+        seg("ssl", [["none", "None"], ["selfsigned", "Self-signed"], ...(ipSite ? [] : [["letsencrypt", "Let's Encrypt"]]), ["custom", "Custom"]], (v) => { if (v === "none") { s.force_https = false; s.hsts = false; httpsToggles.querySelectorAll(".sw-in").forEach((i) => { i.checked = false; }); } drawSsl(); syncHttps(); }),
         certRow, sslDetail, httpsToggles));
       syncHttps();
 
@@ -4154,11 +4164,11 @@
       ])]));
       const res = (ico, label, fn) => el("button", { class: "dm-res", type: "button", onclick: fn }, [icon(ico, 15), el("span", { text: label }), el("span", { class: "tile-chev", text: "›" })]);
       right.append(el("div", { class: "card" }, [el("h3", { text: "Additional resources" }),
-        res("zone", "Modify the DNS zone", () => openZone(d.settings.server_name.replace(/^www\./, ""))),
-        res("search", "Check DNS & WHOIS", () => showDomainInfo(d.settings.server_name)),
+        ipSite ? null : res("zone", "Modify the DNS zone", () => openZone(d.settings.server_name.replace(/^www\./, ""))),
+        ipSite ? null : res("search", "Check DNS & WHOIS", () => showDomainInfo(d.settings.server_name)),
         res("redirect", "Path redirects (.htaccess)", () => navigate("redirects")),
         res("lock", "SSL/TLS certificates", () => navigate("ssl")),
-      ]));
+      ].filter(Boolean)));
       if (!ro) right.append(el("div", { class: "card dm-danger" }, [el("h3", { text: "Remove the domain" }),
         el("p", { class: "muted", html: `Removes the Apache site for <b>${esc(d.settings.server_name)}</b>. Files in <code>${esc(d.settings.docroot)}</code> are kept.` }),
         el("button", { class: "btn btn-danger btn-sm", onclick: async () => {
