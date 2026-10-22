@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import io
 import json
+import os
+import threading
 import time
 from pathlib import Path
 
@@ -28,7 +30,10 @@ from . import (
     appconfig, ddns, ftp, gitvc, guard, images, ipsec, webaccess, netmon, openvpn, phpsettings, portcheck, version, vpncommon, wireguard,
 )
 
-app = FastAPI(title="AuroraPanel", version=version.VERSION, docs_url=None, redoc_url=None)
+# The API schema is a full map of every endpoint, so it's off unless asked for.
+_OPENAPI_URL = "/openapi.json" if os.environ.get("AURORA_ENABLE_OPENAPI") == "1" else None
+app = FastAPI(title="AuroraPanel", version=version.VERSION,
+              docs_url=None, redoc_url=None, openapi_url=_OPENAPI_URL)
 
 FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
 # Changes every process start (i.e. every deploy/restart). Injected into the
@@ -153,9 +158,61 @@ def _auth_log(ok: bool, username: str, request: Request):
     print(f"aurora-auth: {'ok' if ok else 'fail'} user={json.dumps(username[:64])} ip={ip}", flush=True)
 
 
+# Per-IP login throttle (fail2ban still bans at the firewall; this works without it).
+_LOGIN_WINDOW = 15 * 60
+_LOGIN_MAX_FAILS = 10
+_login_fails: dict[str, list[float]] = {}
+_login_lock = threading.Lock()
+
+
+def _client_ip(request: Request) -> str:
+    return request.client.host if request.client else "?"
+
+
+def _login_blocked(ip: str) -> int:
+    """Seconds until this IP may try again (0 = allowed)."""
+    now = time.time()
+    with _login_lock:
+        recent = [t for t in _login_fails.get(ip, []) if now - t < _LOGIN_WINDOW]
+        if recent:
+            _login_fails[ip] = recent
+        else:
+            _login_fails.pop(ip, None)
+        if len(recent) >= _LOGIN_MAX_FAILS:
+            return int(_LOGIN_WINDOW - (now - recent[0])) + 1
+    return 0
+
+
+def _login_failed(ip: str):
+    with _login_lock:
+        _login_fails.setdefault(ip, []).append(time.time())
+        if len(_login_fails) > 10000:  # don't let a spray of IPs grow this forever
+            _login_fails.clear()
+
+
+def _is_https(request: Request) -> bool:
+    if os.environ.get("AURORA_SECURE_COOKIES") == "1":
+        return True
+    proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower()
+    return request.url.scheme == "https" or proto == "https"
+
+
+def _set_session(resp: JSONResponse, request: Request, username: str):
+    resp.set_cookie(
+        auth.COOKIE_NAME, auth.issue_token(username),
+        httponly=True, samesite="strict", max_age=auth.SESSION_TTL_SECONDS, path="/",
+        secure=_is_https(request),
+    )
+
+
 @app.post("/api/login")
 def api_login(body: LoginBody, request: Request):
+    ip = _client_ip(request)
+    wait = _login_blocked(ip)
+    if wait:
+        raise HTTPException(status_code=429, detail=f"Too many failed logins. Try again in {wait // 60 + 1} min.")
     if not config.verify_credentials(body.username, body.password):
+        _login_failed(ip)
         _auth_log(False, body.username, request)
         raise HTTPException(status_code=401, detail="Invalid credentials")
     if twofa.is_enabled():
@@ -163,15 +220,14 @@ def api_login(body: LoginBody, request: Request):
             # Signal the frontend to prompt for a 2FA code.
             raise HTTPException(status_code=401, detail="otp_required")
         if not twofa.verify_login(body.otp):
+            _login_failed(ip)
             _auth_log(False, body.username, request)
             raise HTTPException(status_code=401, detail="Invalid 2FA code")
+    with _login_lock:
+        _login_fails.pop(ip, None)
     _auth_log(True, body.username, request)
-    token = auth.issue_token(body.username)
     resp = JSONResponse({"ok": True, "username": body.username})
-    resp.set_cookie(
-        auth.COOKIE_NAME, token,
-        httponly=True, samesite="strict", max_age=auth.SESSION_TTL_SECONDS, path="/",
-    )
+    _set_session(resp, request, body.username)
     return resp
 
 
@@ -2603,14 +2659,18 @@ def api_prefs_set(body: PrefsBody, user: str = auth.CurrentUser):
 
 
 @app.post("/api/account/password")
-def api_account_password(body: PasswordChangeBody, user: str = auth.CurrentUser):
+def api_account_password(body: PasswordChangeBody, request: Request, user: str = auth.CurrentUser):
     prefs = config.get_prefs()
     if not config.verify_credentials(prefs["username"], body.current):
         raise HTTPException(status_code=400, detail="Current password is incorrect")
     if len(body.new_password) < 8:
         raise HTTPException(status_code=400, detail="New password must be at least 8 characters")
     config.change_password(body.new_password)
-    return {"ok": True}
+    # change_password rotated the signing secret, which signs out every other
+    # session; hand this browser a fresh cookie so it stays logged in.
+    resp = JSONResponse({"ok": True})
+    _set_session(resp, request, prefs["username"])
+    return resp
 
 
 @app.post("/api/account/rename")

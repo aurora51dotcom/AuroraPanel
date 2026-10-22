@@ -60,10 +60,11 @@ def verify_credentials(username: str, password: str) -> bool:
     cfg = load_config()
     if not cfg.get("password_hash"):
         return False
-    if username != cfg.get("username"):
-        return False
+    # Always hash, and compare both fields in constant time, so a wrong
+    # username takes as long as a wrong password (no username probing).
     candidate = _hash_password(password, cfg["salt"])
-    return secrets.compare_digest(candidate, cfg["password_hash"])
+    name_ok = secrets.compare_digest(username.encode("utf-8"), str(cfg.get("username", "")).encode("utf-8"))
+    return secrets.compare_digest(candidate, cfg["password_hash"]) and name_ok
 
 
 def session_secret() -> str:
@@ -77,12 +78,13 @@ def session_secret() -> str:
 
 
 def change_password(new_password: str) -> None:
-    """Update the admin password WITHOUT rotating the session secret, so the
-    current session stays valid."""
+    """Update the admin password and rotate the session secret, which signs out
+    every existing session (the caller re-issues a cookie for the current one)."""
     cfg = load_config()
     salt = secrets.token_hex(16)
     cfg["salt"] = salt
     cfg["password_hash"] = _hash_password(new_password, salt)
+    cfg["session_secret"] = secrets.token_hex(32)
     save_config(cfg)
 
 
