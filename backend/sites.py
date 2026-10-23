@@ -472,9 +472,17 @@ def create_site(settings: dict) -> dict:
     s = _clean(settings)
     conf = _conf_for(s["server_name"])
     if conf and conf.name in SYSTEM_CONFS:
-        raise SiteError(f"{s['server_name']} is already served by Apache's built-in site ({conf.name}, folder "
-                        f"{_settings_from_conf(_live_conf(conf))['docroot'] or '?'}). Open it with Manage to change it, "
-                        f"or create a folder site to get http://{s['server_name']}/<name>.")
+        # This address is Apache's built-in site, and Apache can't have two sites with one name. A folder
+        # given with it means "serve this folder at http://<address>/<folder name>" — a folder site.
+        sys_root = (_settings_from_conf(_live_conf(conf))["docroot"] or "").rstrip("/")
+        raw = ((settings or {}).get("docroot") or "").strip().rstrip("/")
+        if not raw or raw == sys_root:
+            raise SiteError(f"{s['server_name']} is Apache's built-in site, which already serves {sys_root or '?'} at "
+                            f"http://{s['server_name']}/ — open it with Manage to change it. To add a site at "
+                            f"http://{s['server_name']}/<name>, enter a folder such as {sys_root or '/var/www/html'}/mysite.")
+        r = create_folder_site(Path(raw).name, raw)
+        return {**r, "folder_site": True, "server_name": s["server_name"], "docroot": r["path"],
+                "url": f"http://{s['server_name']}/{r['name']}/"}
     if conf:
         raise SiteError("A site with that name already exists")
     conf = AVAIL / f"{_slug(s['server_name'])}.conf"
