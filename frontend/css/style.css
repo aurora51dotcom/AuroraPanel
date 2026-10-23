@@ -989,6 +989,9 @@ pre.log { background: rgba(0,0,0,0.35); border: 1px solid var(--stroke); border-
 .net-v { overflow-wrap: anywhere; }
 .net-mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; overflow-wrap: anywhere; }
 .net-form { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin-top: 10px; }
+.net-form.wide { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.net-form .span-all { grid-column: 1 / -1; }
+@media (max-width: 760px) { .net-form.wide { grid-template-columns: 1fr; } }
 .net-field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--text-dim); }
 .net-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 .net-warn { border-color: rgba(255,179,71,0.45); background: rgba(255,179,71,0.07); }

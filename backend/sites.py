@@ -834,7 +834,7 @@ def _folder_render(items: list[dict]) -> str:
         out.append(f"# /{it['name']}")
         if it["alias"]:
             out.append(f'Alias "/{it["name"]}" "{it["path"]}"')
-        out += [f'<Directory "{it["path"]}">', "    Options -Indexes +FollowSymLinks", "    AllowOverride All",
+        out += [f'<Directory "{it["path"]}">', f"    Options {'+' if it.get('indexes') else '-'}Indexes +FollowSymLinks", "    AllowOverride All",
                 "    Require all granted", "</Directory>", ""]
     return "\n".join(out)
 
@@ -866,8 +866,27 @@ def list_folder_sites() -> dict:
         return {"supported": False, "sites": [], "base": ""}
     items = _folder_state()
     for it in items:
-        it["exists"] = Path(it["path"]).is_dir()
+        d = Path(it["path"])
+        it["exists"] = d.is_dir()
+        it["indexes"] = bool(it.get("indexes"))
+        # Without an index page and with the file list off, Apache answers 403 Forbidden.
+        it["has_index"] = it["exists"] and any((d / f).is_file() for f in _INDEX_FILES)
     return {"supported": True, "sites": items, "base": str(default_docroot())}
+
+
+_INDEX_FILES = ("index.html", "index.htm", "index.php", "index.xhtml", "index.cgi", "index.pl")
+
+
+def set_folder_site_indexes(name: str, on: bool) -> dict:
+    """Turn Apache's automatic file list on or off for a folder site (used when it has no index page)."""
+    _require()
+    items = _folder_state()
+    it = next((x for x in items if x["name"] == (name or "").strip().strip("/").lower()), None)
+    if not it:
+        raise SiteError("No folder site with that name")
+    it["indexes"] = bool(on)
+    _folder_apply(items)
+    return {"ok": True}
 
 
 def create_folder_site(name: str, path: str = "") -> dict:

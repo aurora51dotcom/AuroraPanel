@@ -2751,12 +2751,13 @@
           btn(f.enabled ? "Turn off" : "Turn on", async () => { try { await API.dirPrivacyToggle(f.path, !f.enabled); load(); } catch (e) { toast(e.message, "bad"); } }, "btn-ghost"),
           btn("Remove", async () => { if (!confirmInline(`Remove protection from ${f.path}? It becomes public again.`)) return; try { await API.dirPrivacyRemove(f.path); toast("Protection removed", "good"); load(); } catch (e) { toast(e.message, "bad"); } }, "btn-danger")]),
       ))) : el("p", { class: "empty", text: "No protected folders yet." }));
-      const path = el("input", { type: "text", placeholder: "/var/www/html/private" });
+      const path = el("input", { type: "text", class: "cw-mono", placeholder: "/var/www/html/private", spellcheck: "false" });
       const label = el("input", { type: "text", placeholder: "e.g. Staff area", maxlength: 60 });
       const user = el("input", { type: "text", placeholder: "username", maxlength: 32, autocomplete: "off" });
       const pw = passwordField();
       body.append(el("div", { class: "card" }, [el("h3", { text: "Protect a folder" }),
-        el("div", { class: "net-form" }, [field("Folder", path, "Everything inside it (and sub-folders) needs a login."), field("Login prompt text", label), field("First user", user), field("Password", pw.node, "Leave empty to generate one.")]),
+        el("div", { class: "net-form wide" }, [(() => { const f = field("Folder", path, "Everything inside it (and sub-folders) needs a login."); f.classList.add("span-all"); return f; })(),
+          field("Login prompt text", label), field("First user", user), field("Password", pw.node, "Leave empty to generate one.")]),
         el("div", { style: "margin-top:12px" }, btn("Protect folder", async () => {
           const password = pw.value() || genPassword();
           try { await API.dirPrivacyProtect({ path: path.value.trim(), label: label.value.trim(), name: user.value.trim(), password }); load(); showPw(user.value.trim(), password); } catch (e) { toast(e.message, "bad"); }
@@ -4089,15 +4090,21 @@
         return box;
       }
       box.append(el("div", { class: "table-wrap" }, el("table", { class: "dm-table" }, [
-        el("thead", {}, el("tr", {}, ["Address", "Folder", ""].map((h) => el("th", { text: h })))),
+        el("thead", {}, el("tr", {}, ["Address", "Folder", "File list", ""].map((h) => el("th", { text: h })))),
         el("tbody", {}, items.map((f) => el("tr", { class: f.exists ? "" : "dm-off" }, [
           el("td", {}, el("div", { class: "dm-name" }, [
             el("a", { href: `http://${host}/${f.name}/`, target: "_blank", rel: "noopener", title: "Open site" }, [icon("link", 13), ` ${host}/${f.name}/`]),
             el("span", { class: "dm-tags" }, [
               f.alias ? el("span", { class: "pill dim", title: "Outside the default site's folder — served through an Apache Alias", text: "alias" }) : null,
-              f.exists ? null : el("span", { class: "pill warn", text: "folder missing" })]),
+              f.exists ? null : el("span", { class: "pill warn", text: "folder missing" }),
+              // No index page + no file list = Apache answers 403 Forbidden.
+              f.exists && !f.has_index && !f.indexes ? el("span", { class: "pill warn", title: "Visitors get 403 Forbidden at this address: add an index.html, or turn on the file list", text: "no index page" }) : null]),
           ])),
           el("td", {}, el("span", { class: "dm-root" }, [icon("home", 13), " ", f.path])),
+          el("td", {}, sw(f.indexes, async (v, inp) => {
+            try { await API.folderSiteIndexes(f.name, v); toast(`File list ${v ? "on" : "off"} · /${f.name}`, "good"); load(); }
+            catch (e) { inp.checked = !v; toast(e.message, "bad"); }
+          }, { title: "Show a list of the files when the folder has no index page" })),
           el("td", { class: "actions" }, [
             el("button", { class: "btn btn-sm", onclick: () => { fmState.cwd = f.path; navigate("files"); } }, [icon("folder", 13), " Files"]),
             el("button", { class: "btn btn-sm btn-ghost", title: "Stop serving it through the panel (files are kept)", onclick: async () => {
@@ -4297,7 +4304,7 @@
             } else if (e.key === "Backspace" && !inp.value && s.aliases.length) { s.aliases.pop(); drawChips(); dirty(); chips.querySelector("input").focus(); }
           } });
           chips.append(inp);
-        }
+        } else if (!s.aliases.length) chips.append(el("span", { class: "muted", text: "None — the built-in sites answer on any name that reaches this Pi." }));
       };
       drawChips();
       left.append(card("globe", "Update the domain", "Where the files live and which names this site answers on.",

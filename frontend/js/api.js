@@ -298,6 +298,7 @@ const API = (() => {
     siteCreate: (settings) => request("POST", "/api/sites/create", { settings }),
     siteSave: (original, settings) => request("POST", "/api/sites/save", { original, settings }),
     siteToggle: (server_name, key, value) => request("POST", "/api/sites/toggle", { server_name, key, value }),
+    folderSiteIndexes: (name, on) => request("POST", "/api/sites/folders/indexes", { name, on }),
     siteConfSave: (name, text) => request("POST", "/api/sites/conf", { name, text }),
     siteSystemCustom:(conf, custom) => request("POST", "/api/sites/system-custom", { conf, custom: custom || "" }),
     siteSystemSsl:(conf, ssl, cert, key, chain) => request("POST", "/api/sites/system-ssl", { conf, ssl, cert: cert || "", key: key || "", chain: chain || "" }),

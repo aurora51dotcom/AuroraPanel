@@ -1506,6 +1506,16 @@ def api_site_system_ssl(body: SystemSslBody, user: str = auth.CurrentUser):
     return _site_call(sites.set_system_ssl, body.conf, body.ssl, body.cert, body.key, body.chain)
 
 
+class FolderIndexesBody(BaseModel):
+    name: str
+    on: bool
+
+
+@app.post("/api/sites/folders/indexes")
+def api_folder_site_indexes(body: FolderIndexesBody, user: str = auth.CurrentUser):
+    return _site_call(sites.set_folder_site_indexes, body.name, body.on)
+
+
 class SiteConfBody(BaseModel):
     name: str
     text: str
