@@ -78,3 +78,15 @@ def test_custom_block_markers_roundtrip():
     text = "<VirtualHost *:80>\n    ServerName x.test" + block + "\n</VirtualHost>\n"
     assert sites._CX_BLOCK.search(text)
     assert not re.search("X-A", sites._CX_BLOCK.sub("", text))
+
+
+def test_builtin_ssl_choice_is_remembered(tmp_path):
+    """A Custom certificate can be the panel's own self-signed files; the picked option must stick."""
+    own = sites.SSL_DIR / "192.168.0.100.crt"
+    body = (f"<VirtualHost *:443>\n    ServerName 192.168.0.100\n    SSLEngine on\n"
+            f"    SSLCertificateFile {own}\n    SSLCertificateKeyFile {own.with_suffix('.key')}\n</VirtualHost>\n")
+    conf = tmp_path / "default-ssl.conf"
+    conf.write_text(body)
+    assert sites._settings_from_conf(conf)["ssl"] == "selfsigned"  # guessed from the path
+    conf.write_text("# aurora-ssl-mode: custom\n" + body)
+    assert sites._settings_from_conf(conf)["ssl"] == "custom"

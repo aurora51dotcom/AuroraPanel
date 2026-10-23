@@ -33,6 +33,7 @@ LE_LIVE = Path("/etc/letsencrypt/live")
 DEFAULT_DOCROOT_BASE = Path("/var/www")
 SYSTEM_CONFS = {"000-default.conf", "default-ssl.conf"}
 MARK = "# aurora-settings:"
+_SSL_MODE = re.compile(r"(?m)^# aurora-ssl-mode: (selfsigned|custom)\n?")
 _CX_BEGIN, _CX_END = "# aurora-custom begin", "# aurora-custom end"
 _CX_BLOCK = re.compile(rf"\n[ \t]*{re.escape(_CX_BEGIN)}.*?{re.escape(_CX_END)}[ \t]*", re.S)
 _HOST = re.compile(r"^(?=.{1,253}$)(\*\.)?([A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$")
@@ -111,7 +112,8 @@ def _settings_from_conf(path: Path) -> dict:
     if https:
         le = str(LE_LIVE) in (https["cert"] or "")
         own = (https["cert"] or "") == str(SSL_DIR / f"{_slug(s['server_name'])}.crt")
-        s.update(ssl="letsencrypt" if le else "selfsigned" if own else "custom",
+        picked = _SSL_MODE.search(text)  # the choice made in the panel wins over guessing from the path
+        s.update(ssl=picked.group(1) if picked else "letsencrypt" if le else "selfsigned" if own else "custom",
                  cert=https["cert"] or "", key=https["key"] or "", chain=https["chain"] or "")
     if http and http["https_redirect"]:
         s["force_https"] = True
@@ -639,7 +641,9 @@ def set_system_ssl(conf_name: str, mode: str, cert: str = "", key: str = "", cha
         raise SiteError("Pick None, Self-signed or Custom")
     if any(c in cert + key + chain for c in "\n\"'<>"):
         raise SiteError("Invalid certificate path")
-    new = text
+    # Remember which option was picked: a Custom certificate can be the same files as the self-signed one.
+    new = _SSL_MODE.sub("", text)
+    new = f"# aurora-ssl-mode: {mode}\n" + new
     for directive, val in (("SSLCertificateFile", cert), ("SSLCertificateKeyFile", key)):
         rx = re.compile(rf"(?im)^([ \t]*){directive}[ \t]+\S.*$")
         if not rx.search(new):
