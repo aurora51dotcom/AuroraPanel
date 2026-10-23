@@ -1,11 +1,11 @@
-"""A sandboxed file manager.
+"""The file manager.
 
 It opens in the web server's folder (e.g. /var/www/html) when one is installed,
-otherwise in the default (non-root) user's home. Any path can be typed in, but
-every operation is confined to the allowed folders: /var/www, each website's
-document root and that user's home — or only AURORA_FILE_ROOT when it is set.
-Paths in the API are absolute (relative ones start at the opening folder) and
-are resolved and checked, so '..' and symlinks can't escape the allowed folders.
+otherwise in the default (non-root) user's home, and can browse the whole Pi.
+Setting AURORA_FILE_ROOT confines it to that one folder instead. Paths in the
+API are absolute (relative ones start at the opening folder) and are resolved,
+so '..' and symlinks can't escape AURORA_FILE_ROOT. The system root, its
+top-level folders, /var/www, home folders and website folders can't be deleted.
 """
 from __future__ import annotations
 
@@ -65,35 +65,52 @@ def file_root() -> Path:
 _roots_cache: tuple[float, list[Path]] = (0.0, [])
 
 
+def _site_roots() -> list[Path]:
+    try:
+        from . import sites
+        return [Path(s["docroot"]).resolve() for s in sites.list_sites().get("sites", [])
+                if s.get("docroot") and Path(s["docroot"]).is_dir()]
+    except Exception:  # noqa: BLE001 — Apache missing or a conf it can't read: just fewer folders
+        return []
+
+
 def allowed_roots() -> list[Path]:
-    """Folders the File Manager may work in (see the module docstring)."""
+    """Shortcut folders shown above the listing; with AURORA_FILE_ROOT, the only folder allowed."""
     global _roots_cache
     if os.environ.get("AURORA_FILE_ROOT"):
         return [FILE_ROOT]
     if time.time() - _roots_cache[0] < 10:
         return _roots_cache[1]
-    roots = [FILE_ROOT, _default_user_home().resolve()]
-    if Path("/var/www").is_dir():
-        roots.append(Path("/var/www").resolve())
-    try:
-        from . import sites
-        for s in sites.list_sites().get("sites", []):
-            if s.get("docroot") and Path(s["docroot"]).is_dir():
-                roots.append(Path(s["docroot"]).resolve())
-    except Exception:  # noqa: BLE001 — Apache missing or a conf it can't read: just fewer roots
-        pass
-    # Drop any root already inside another one; the system root is never one.
     out = []
-    for r in sorted(set(roots), key=lambda p: len(p.parts)):
-        if len(r.parts) > 1 and not any(r == o or o in r.parents for o in out):
+    for r in (Path("/var/www"), FILE_ROOT, Path("/home"), _default_user_home(), Path("/")):
+        r = r.resolve()
+        if r.is_dir() and r not in out:
             out.append(r)
-    out.sort(key=lambda p: (not str(p).startswith("/var/www"), str(p)))
     _roots_cache = (time.time(), out)
     return out
 
 
 def _allowed(p: Path) -> bool:
-    return any(p == r or r in p.parents for r in allowed_roots())
+    # The panel runs as root with a root Terminal, so browsing the whole Pi adds no access;
+    # AURORA_FILE_ROOT still confines the File Manager to one folder.
+    if not os.environ.get("AURORA_FILE_ROOT"):
+        return True
+    return p == FILE_ROOT or FILE_ROOT in p.parents
+
+
+def _protected(p: Path) -> bool:
+    """Folders the File Manager refuses to delete."""
+    if len(p.parts) <= 2:  # "/" and /etc, /home, /usr, /var, …
+        return True
+    keep = {FILE_ROOT, Path("/var/www"), Path("/var/lib"), Path("/var/log"), Path("/var/lib/aurora"),
+            Path("/usr/local"), Path("/usr/lib"), Path("/usr/bin"), Path("/usr/sbin"), Path("/usr/share")}
+    keep |= set(allowed_roots()) | set(_site_roots())
+    try:
+        import pwd
+        keep |= {Path(u.pw_dir) for u in pwd.getpwall() if u.pw_dir.startswith("/home/")}
+    except ImportError:
+        pass
+    return p in keep or (p.parent == Path("/etc") and p.is_dir())
 
 
 def _trash_dir(root: Path) -> Path:
@@ -125,7 +142,7 @@ def _resolve(path: str) -> Path:
     p = (path or "").strip()
     candidate = Path(p).resolve() if p.startswith("/") else (FILE_ROOT / p.lstrip("\\")).resolve()
     if not _allowed(candidate):
-        raise FileError("The File Manager can only open " + ", ".join(_rel(r) for r in allowed_roots()) + " and folders inside them")
+        raise FileError(f"The File Manager is limited to {_rel(FILE_ROOT)} (AURORA_FILE_ROOT)")
     return candidate
 
 
@@ -170,7 +187,7 @@ def list_dir(rel_path: str) -> dict:
         "root": _rel(FILE_ROOT),
         "roots": [_rel(r) for r in allowed_roots()],
         "cwd": _rel(target),
-        "parent": _rel(target.parent) if _allowed(target.parent) else None,
+        "parent": _rel(target.parent) if target != target.parent and _allowed(target.parent) else None,
         "entries": entries,
     }
 
@@ -198,8 +215,8 @@ def write_text(rel_path: str, content: str) -> dict:
 
 def delete(rel_path: str, permanent: bool = False) -> dict:
     target = _resolve(rel_path)
-    if target == FILE_ROOT or target in allowed_roots():
-        raise FileError(f"Refusing to delete {_rel(target)} — it's one of the File Manager's main folders")
+    if _protected(target):
+        raise FileError(f"Refusing to delete {_rel(target)} — it's a system, home or website folder")
     if target == TRASH_DIR:
         raise FileError("Refusing to delete the recycle bin")
     if not target.exists() and not target.is_symlink():

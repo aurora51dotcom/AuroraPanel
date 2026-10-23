@@ -85,7 +85,7 @@ Environment variables (set them before launch or in the systemd unit):
 | `HOST` | `0.0.0.0` (Linux) / `127.0.0.1` (Win) | Bind address |
 | `PORT` | `8088` | Bind port |
 | `AURORA_USER` | user who ran `install.sh` | The Pi's regular login (default home, protected from deletion) |
-| `AURORA_FILE_ROOT` | web root, else that user's home | Root directory the File Manager is confined to |
+| `AURORA_FILE_ROOT` | not set (whole Pi; opens in the web root) | Confine the File Manager to this one folder |
 
 Credentials are stored in `aurora_config.json` (git-ignored). Delete that file
 to re-run first-time setup.
@@ -102,9 +102,10 @@ to re-run first-time setup.
   changing the password or turning on 2FA signs out every other session.
 - A strict Content-Security-Policy is sent with every page, and untrusted text
   (log lines, usernames from failed logins) is only ever rendered as text.
-- The file manager opens in the web folder and is confined to `/var/www`, website folders and your
-  home (or to `AURORA_FILE_ROOT` when set); it rejects `..`/symlink
-  escapes; service names are validated before being passed to `systemctl`.
+- The file manager opens in the web folder and can browse the whole Pi (like the root Terminal);
+  set `AURORA_FILE_ROOT` to confine it to one folder (it then rejects `..`/symlink escapes). It
+  refuses to delete `/`, top-level system folders, home folders and website folders. Service
+  names are validated before being passed to `systemctl`.
 - Sessions are HttpOnly, SameSite=strict cookies signed with a per-install
   secret that rotates whenever the password changes.
 

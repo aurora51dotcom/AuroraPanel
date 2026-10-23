@@ -1303,10 +1303,13 @@
       // Each segment is clickable; the ones outside the allowed folders are plain text.
       const crumbs = $("#fm-crumb"); crumbs.innerHTML = "";
       const parts = data.cwd.split("/").filter(Boolean);
+      const top = (data.roots || []).includes("/");
+      if (!parts.length) crumbs.append(el("b", { text: "/" }));
+      else if (top) crumbs.append(el("a", { href: "#", text: "/", title: "Open /", onclick: (e) => { e.preventDefault(); fmLoad("/"); } }));
       parts.forEach((p, i) => {
         const full = "/" + parts.slice(0, i + 1).join("/");
         const open = (data.roots || []).some((r) => full === r || full.startsWith(r + "/"));
-        crumbs.append(el("span", { class: "muted", text: "/" }),
+        crumbs.append(i === 0 && top ? "" : el("span", { class: "muted", text: "/" }),
           i === parts.length - 1 ? el("b", { text: p }) : open ? el("a", { href: "#", text: p, onclick: (e) => { e.preventDefault(); fmLoad(full); } }) : el("span", { class: "muted", text: p }));
       });
       const roots = $("#fm-roots"); roots.innerHTML = "";
@@ -4055,7 +4058,7 @@
             try { await API.siteToggle(s.system ? s.conf : s.server_name, "force_https", v); toast(`Force HTTPS ${v ? "on" : "off"} · ${s.server_name}`, "good"); load(); }
             catch (e) { inp.checked = !v; toast(e.message, "bad"); }
           }, { title: "Redirect all HTTP traffic to HTTPS" })),
-          el("td", {}, sslPill(s)),
+          el("td", {}, sslPill(s.https_via ? { ...s, ...s.https_via } : s)),  // http built-in site: https comes from default-ssl
           el("td", { class: "actions" }, [
             el("button", { class: "btn btn-sm", onclick: () => openDomain(s.system ? s.conf : s.server_name) }, [icon("services", 13), " Manage"]),
             isIp(s.server_name) ? null : el("button", { class: "btn btn-sm btn-ghost", title: "DNS zone", onclick: () => openZone(s.server_name.replace(/^www\./, "")) }, [icon("zone", 13), " Zone"]),
@@ -4134,15 +4137,26 @@
     // Two kinds: a domain/IP of its own, or a folder at http(s)://<this Pi>/<name>.
     const kind = el("div", { class: "cw-seg cw-seg-sm", style: "margin-bottom:14px" });
     const domainBox = el("div", {}), folderBox = el("div", { hidden: true });
+    // Three kinds: Local = a folder at http(s)://<this Pi>/<name>; IP = a site of its own on an IP address; Domain = a domain name.
     const setKind = (k) => {
       kind.querySelectorAll("button").forEach((b) => b.classList.toggle("active", b.dataset.k === k));
-      domainBox.hidden = k !== "domain"; folderBox.hidden = k !== "folder";
-      go.textContent = k === "folder" ? "Create folder site" : "Create domain";
-      setTimeout(() => (k === "folder" ? fName : name).focus(), 30);
+      domainBox.hidden = k === "local"; folderBox.hidden = k !== "local";
+      go.textContent = k === "local" ? "Create local site" : k === "ip" ? "Create IP site" : "Create domain";
+      if (k !== "local") {
+        const ipKind = k === "ip";
+        $("#nd-lbl", domainBox).firstChild.textContent = ipKind ? "IP address" : "Domain";
+        name.placeholder = ipKind ? "e.g. 192.168.0.50 — another address of this Pi" : "example.com, or a local name like mysite.test";
+        $("#nd-hint-ip", domainBox).hidden = !ipKind; $("#nd-hint-dom", domainBox).hidden = ipKind;
+        ["#nd-www", "#nd-zone"].forEach((id) => { $(id, f).parentElement.hidden = ipKind; if (ipKind) $(id, f).checked = false; });
+        if (!ipKind) $("#nd-www", f).checked = true;
+        if (name.value.trim() && isIp(name.value.trim()) !== ipKind) { name.value = ""; name.dispatchEvent(new Event("input")); }
+      }
+      setTimeout(() => (k === "local" ? fName : name).focus(), 30);
     };
     kind.append(
-      el("button", { type: "button", "data-k": "domain", text: "Domain or IP", onclick: () => setKind("domain") }),
-      el("button", { type: "button", "data-k": "folder", text: `Folder · ${location.hostname}/name`, onclick: () => setKind("folder") }));
+      el("button", { type: "button", "data-k": "local", text: `Local · ${location.hostname}/name`, title: "A folder on this Pi's address — no domain needed", onclick: () => setKind("local") }),
+      el("button", { type: "button", "data-k": "ip", text: "IP address", title: "A site of its own on an IP address", onclick: () => setKind("ip") }),
+      el("button", { type: "button", "data-k": "domain", text: "Domain", title: "A domain name, or a local name like mysite.test", onclick: () => setKind("domain") }));
     folderBox.innerHTML = `
       <label class="cw-lbl">Site name<div class="dm-prefix"><span>http(s)://${esc(location.hostname)}/</span><input id="nf-name" type="text" placeholder="mysite" autocomplete="off" /></div></label>
       <label class="cw-lbl">Folder<input id="nf-path" type="text" class="cw-mono" placeholder="/var/www/html/mysite" autocomplete="off" spellcheck="false" /></label>
@@ -4155,12 +4169,13 @@
     fPath.addEventListener("input", () => { pathTouched = !!fPath.value.trim(); });
     f.append(kind, domainBox, folderBox);
     domainBox.innerHTML = `
-      <label class="cw-lbl">Domain or IP address<input id="nd-name" type="text" placeholder="example.com or 192.168.0.100" autocomplete="off" /></label>
+      <label class="cw-lbl" id="nd-lbl">Domain<input id="nd-name" type="text" placeholder="example.com" autocomplete="off" /></label>
       <label class="cw-lbl">Document root<input id="nd-root" type="text" placeholder="/var/www/example.com" /></label>
       <label class="dm-check"><input id="nd-www" type="checkbox" checked /> Also answer on <b id="nd-www-l">www.example.com</b></label>
       <label class="dm-check"><input id="nd-ssl" type="checkbox" /> Create a self-signed certificate &amp; force HTTPS <span class="muted">(switch to Let's Encrypt later)</span></label>
       <label class="dm-check"><input id="nd-zone" type="checkbox" /> Create a DNS zone for it in the Zone Editor</label>
-      <p class="muted" style="font-size:12px;margin:4px 0 0">Local names like <code>mysite.test</code> work too — you'll get the hosts-file line to add on your computer. No domain? Enter this Pi's IP to serve a folder at <code>http://&lt;ip&gt;/</code>.</p>`;
+      <p class="muted" id="nd-hint-dom" style="font-size:12px;margin:4px 0 0">Local names like <code>mysite.test</code> work too — you'll get the hosts-file line to add on your computer.</p>
+      <p class="muted" id="nd-hint-ip" hidden style="font-size:12px;margin:4px 0 0">The site answers on <code>http://&lt;ip&gt;/</code>. For this Pi's own address (<code>${esc(location.hostname)}</code>), which Apache's built-in site already uses, enter a folder such as <code>/var/www/html/mysite</code> and it's served at <code>http://${esc(location.hostname)}/mysite/</code> — or use <b>Local</b>.</p>`;
     const name = $("#nd-name", domainBox), rootIn = $("#nd-root", domainBox);
     // The document root fills itself in from the name until it's edited by hand.
     let rootTouched = false;
@@ -4168,7 +4183,10 @@
     name.addEventListener("input", () => {
       const n = name.value.trim().toLowerCase() || "example.com";
       rootIn.placeholder = `/var/www/${n}`;
-      if (!rootTouched) rootIn.value = name.value.trim() ? `/var/www/${n}` : "";
+      // The Pi's own address is the built-in site, so a folder under its web root becomes http://<ip>/<name>.
+      const own = n === location.hostname.toLowerCase();
+      if (own) rootIn.placeholder = "/var/www/html/mysite";
+      if (!rootTouched) rootIn.value = !name.value.trim() ? "" : own ? "/var/www/html/" : `/var/www/${n}`;
       $("#nd-www-l", f).textContent = n.startsWith("www.") ? n.slice(4) : "www." + n;
       const ip = isIp(n);
       ["#nd-www", "#nd-zone"].forEach((id) => { const c = $(id, f); c.disabled = ip; if (ip) c.checked = false; c.parentElement.classList.toggle("dm-dim", ip); });
@@ -4194,11 +4212,15 @@
       try {
         const r = await API.siteCreate(settings);
         if ($("#nd-zone", f).checked && !isIp(n)) { try { await API.dnsZoneCreate(n.replace(/^www\./, ""), "", "default"); } catch (e) { toast("Zone: " + e.message, "bad"); } }
+        if (r.folder_site) {  // the Pi's own address + a folder → a folder site at http://<ip>/<name>
+          closeModal(); toast(`Created ${r.url} → ${r.path}`, "good");
+          return state.refreshHandler && state.refreshHandler();
+        }
         closeModal(); toast(`Created ${r.server_name}`, "good"); openDomain(r.server_name);
       } catch (e) { toast(e.message, "bad"); go.disabled = false; }
     } });
     openModal("Create a new site", f, [go]);
-    setKind(mode === "folder" ? "folder" : "domain");
+    setKind(mode === "folder" ? "local" : "domain");
   }
 
   function viewDomainManage(root, name) {
@@ -4243,8 +4265,12 @@
       const card = (ico, title, sub, ...kids) => el("div", { class: "card dmm-card" }, [
         el("div", { class: "cw-card-h" }, [icon(ico, 16), el("div", {}, [el("h3", { text: title }), sub ? el("p", { text: sub }) : null])]), ...kids]);
       const field = (label, input, hint) => el("label", { class: "cw-lbl" }, [label, input, hint ? el("span", { class: "dm-hint", text: hint }) : null]);
-      // The built-in https site keeps its settings read-only except the certificate, applied with its own button.
-      const sysSsl = ro && !d.has_http;
+      // The built-in sites keep their settings read-only except the certificate, applied with its own button.
+      // The http one (000-default) gets its https from default-ssl, so its card shows and changes that certificate.
+      const viaHttps = ro && d.has_http ? d.https : null;
+      const sysSsl = ro && (!d.has_http || !!viaHttps);
+      const sslConf = viaHttps ? viaHttps.conf : d.conf;
+      if (viaHttps) Object.assign(s, { ssl: viaHttps.ssl, cert: viaHttps.cert, key: viaHttps.key, chain: viaHttps.chain });
       const text = (key, ph, editable) => { const i = el("input", { type: "text", value: s[key] || "", placeholder: ph || "", oninput: (e) => { s[key] = e.target.value; dirty(); } }); if (ro && !editable) i.disabled = true; return i; };
       const toggleRow = (key, title, desc, onChange) => el("div", { class: "dm-trow" }, [
         el("div", {}, [el("b", { text: title }), el("span", { text: desc })]),
@@ -4284,18 +4310,24 @@
 
       // ---- HTTPS ----
       const sslDetail = el("div", { class: "dm-ssl-detail" });
-      const certRow = d.cert ? el("div", { class: "dm-cert" }, [icon("lock", 14), el("span", { html: `<b>${esc(d.cert.subject || "")}</b> · issued by ${esc(d.cert.issuer || "?")} · expires <b>${esc(d.cert.expires || "?")}</b>` })]) : null;
+      const shownCert = viaHttps ? viaHttps.cert_info : d.cert;
+      const certRow = shownCert ? el("div", { class: "dm-cert" }, [icon("lock", 14), el("span", { html: `<b>${esc(shownCert.subject || "")}</b> · issued by ${esc(shownCert.issuer || "?")} · expires <b>${esc(shownCert.expires || "?")}</b>` })]) : null;
       const drawSsl = () => {
         sslDetail.innerHTML = "";
         if (s.ssl === "none") sslDetail.append(el("p", { class: "dm-hint", text: "Visitors can only reach the site over plain http://. Pick a certificate to enable HTTPS." }));
         if (s.ssl === "selfsigned") sslDetail.append(el("p", { class: "dm-hint", text: "A certificate is generated on this Pi (covers the domain + aliases). Encrypts traffic, but browsers show a warning — fine for LAN/.test sites." }));
-        if (s.ssl === "none" && sysSsl) { sslDetail.innerHTML = ""; sslDetail.append(el("p", { class: "dm-hint", text: "None turns this https site (port 443) off. http:// keeps working through the default http site." })); }
+        if (sysSsl) { sslDetail.innerHTML = ""; sslDetail.append(el("p", { class: "dm-hint", text: (viaHttps ? `https:// for this address is served by Apache's built-in https site (${sslConf}); this changes its certificate. ` : "") +
+          (s.ssl === "none" ? `None turns ${sslConf} (https on port 443) off. http:// keeps working.` : s.ssl === "selfsigned" ? "A certificate is generated on this Pi for its address. Browsers show a warning — fine on a LAN." : "Point to your own certificate and key files.") })); }
         if (s.ssl === "custom") sslDetail.append(field("Certificate file (.crt / fullchain.pem)", text("cert", "/etc/ssl/certs/site.crt", sysSsl)), field("Private key", text("key", "/etc/ssl/private/site.key", sysSsl)), field("Chain (optional)", text("chain", "", sysSsl)));
         if (sysSsl) {
           const apply = el("button", { class: "btn btn-primary btn-sm", type: "button", onclick: async () => {
-            if (s.ssl === "none" && !confirmInline(`Turn off ${d.conf} (https on port 443)? You can turn it back on with Self-signed or Custom, or Enable site.`)) return;
+            if (s.ssl === "none" && !confirmInline(`Turn off ${sslConf} (https on port 443)?${d.settings.force_https ? " Force HTTPS on this site will be turned off too, so http keeps working." : ""} You can turn it back on with Self-signed or Custom.`)) return;
             apply.disabled = true;
-            try { await API.siteSystemSsl(d.conf, s.ssl, s.cert, s.key, s.chain); toast(s.ssl === "none" ? `${d.conf} turned off` : "Certificate applied & Apache reloaded", "good"); load(); }
+            try {
+              // Without an https site a Force HTTPS redirect would lead nowhere.
+              if (s.ssl === "none" && viaHttps && d.settings.force_https) await API.siteToggle(d.conf, "force_https", false);
+              await API.siteSystemSsl(sslConf, s.ssl, s.cert, s.key, s.chain); toast(s.ssl === "none" ? `${sslConf} turned off` : "Certificate applied & Apache reloaded", "good"); load();
+            }
             catch (e) { openModal("Couldn't change the certificate", el("pre", { class: "log", text: e.message }), []); apply.disabled = false; }
           } }, [icon("lock", 13), " Apply certificate"]);
           sslDetail.append(el("div", {}, apply));
@@ -4358,7 +4390,8 @@
         toggleRow("hsts", "HSTS", "Tell browsers to only ever use HTTPS for a year. Enable once HTTPS is working reliably."),
       ]);
       const syncHttps = () => httpsToggles.classList.toggle("dm-dim", s.ssl === "none" && !ro);
-      if (sysSsl) httpsToggles.hidden = true;  // Force HTTPS lives on the http site; HSTS is read-only here
+      if (sysSsl && !viaHttps) httpsToggles.hidden = true;  // Force HTTPS lives on the http site
+      if (ro) httpsToggles.querySelectorAll(".dm-trow")[1].hidden = true;  // HSTS isn't set on the built-in sites
       left.append(card("lock", "HTTPS / SSL", "Encrypt traffic and choose where the certificate comes from.",
         seg("ssl", [["none", "None"], ["selfsigned", "Self-signed"], ...(ipSite || sysSsl ? [] : [["letsencrypt", "Let's Encrypt"]]), ["custom", "Custom"]], (v) => { if (v === "none" && !sysSsl) { s.force_https = false; s.hsts = false; httpsToggles.querySelectorAll(".sw-in").forEach((i) => { i.checked = false; }); } drawSsl(); syncHttps(); }, sysSsl),
         certRow, sslDetail, httpsToggles));
@@ -4382,10 +4415,27 @@
 
       // ---- Advanced ----
       const custom = el("textarea", { class: "cw-mono", rows: 5, placeholder: "# Extra Apache directives for this site, e.g.\nHeader set X-Robots-Tag \"noindex\"\nProxyPass /api http://127.0.0.1:3000/api", oninput: (e) => { s.custom = e.target.value; dirty(); } });
-      custom.value = s.custom || ""; if (ro) custom.disabled = true;
-      left.append(card("terminal", "Advanced", "Raw directives added inside the VirtualHost. Validated with apache2ctl before saving.",
-        custom,
-        el("div", {}, el("button", { class: "btn btn-sm btn-ghost", type: "button", onclick: () => openModal(d.conf, el("pre", { class: "log", text: d.config_text }), []) }, [icon("mime", 13), " View current config file"]))));
+      custom.value = s.custom || "";
+      // Built-in sites: the directives go in a marked block of their own, applied with this button.
+      const applyCustom = ro ? el("button", { class: "btn btn-primary btn-sm", type: "button", onclick: async () => {
+        applyCustom.disabled = true;
+        try { await API.siteSystemCustom(d.conf, custom.value); toast("Directives applied & Apache reloaded", "good"); load(); }
+        catch (e) { openModal("Couldn't apply the directives", el("pre", { class: "log", text: e.message }), []); applyCustom.disabled = false; }
+      } }, [icon("backup", 13), " Apply directives"]) : null;
+      left.append(card("terminal", "Advanced", ro ? `Raw directives added inside the ${d.has_http ? "http (port 80)" : "https (port 443)"} VirtualHost of ${d.conf}, in a marked block — the rest of the file is left alone. Validated with apache2ctl first.` : "Raw directives added inside the VirtualHost. Validated with apache2ctl before saving.",
+        custom, applyCustom ? el("div", {}, applyCustom) : null,
+        el("div", {}, el("button", { class: "btn btn-sm btn-ghost", type: "button", onclick: () => {
+          // Full-file editor: checked with apache2ctl and put back if Apache rejects it.
+          const ed = el("textarea", { class: "cw-mono dm-conf-ed", rows: 24, spellcheck: "false" }); ed.value = d.config_text;
+          const saveConf = el("button", { class: "btn btn-primary", onclick: async () => {
+            saveConf.disabled = true;
+            try { await API.siteConfSave(d.system ? d.conf : d.settings.server_name, ed.value); closeModal(); toast(`${d.conf} saved & Apache reloaded`, "good"); load(); }
+            catch (e) { toast(e.message.split("\n").slice(0, 3).join(" · "), "bad"); saveConf.disabled = false; }
+          } }, [icon("backup", 14), " Save file"]);
+          openModal(d.conf, el("div", {}, [
+            el("p", { class: "dm-hint", style: "margin:0 0 8px", text: d.managed ? "AuroraPanel manages this file: saving the settings form later rewrites it from the form, so put lasting extras in Advanced instead." : "Edit the file Apache loads. It's checked with apache2ctl first, a backup goes to /var/lib/aurora/site-backups, and nothing changes if Apache rejects it." }),
+            ed]), [saveConf]);
+        } }, [icon("mime", 13), " View / edit config file"]))));
 
       // ---- right column ----
       const info = (k, v) => el("div", { class: "info-row" }, [el("span", { class: "k", text: k }), el("span", { class: "v" }, v)]);
