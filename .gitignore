@@ -6,3 +6,7 @@ aurora_config.json
 .DS_Store
 aurorahomepage/
 deploy/
+.pytest-tmp/
+.pytest_cache/
+.coverage
+htmlcov/

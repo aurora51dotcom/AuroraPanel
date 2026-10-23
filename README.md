@@ -109,6 +109,20 @@ to re-run first-time setup.
 - Sessions are HttpOnly, SameSite=strict cookies signed with a per-install
   secret that rotates whenever the password changes.
 
+## Testing
+
+Tests live in `tests/` (pytest, with a coverage report). They use a throwaway login, config and
+File Manager folder, and only call read-only pages, so they never change your Pi.
+
+| Where | Command | What it checks |
+|---|---|---|
+| On a Pi (recommended) | `sudo bash tests/run.sh` | Everything, against the real system: every page loads without crashing, login and sessions, File Manager safety, Apache site rules |
+| Any computer | `pip install -r requirements-dev.txt && python -m pytest` | Same, minus the Linux-only parts (skipped on Windows/macOS) |
+| GitHub | automatic on every push | Same suite on Ubuntu; the coverage report is attached to each run |
+
+Open `htmlcov/index.html` afterwards to see which lines the tests reached. Run one area with
+`-k`, e.g. `sudo bash tests/run.sh -k sites`.
+
 ## Project layout
 
 ```
