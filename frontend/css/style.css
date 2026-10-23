@@ -1380,3 +1380,6 @@ pre.log { background: rgba(0,0,0,0.35); border: 1px solid var(--stroke); border-
   background: rgba(255,255,255,0.03); border: 1px solid var(--stroke); color: var(--text-dim); font-size: 13px; line-height: 1.5; }
 .about-privacy .ic { flex: none; margin-top: 2px; color: var(--good); }
 :root[data-theme="light"] .about-privacy { background: rgba(0,0,0,0.03); }
+.ax-wiz.nudge { animation: axNudge .35s ease; }
+@keyframes axNudge { 30% { transform: scale(1.015); } 60% { transform: scale(.995); } }
+@media (prefers-reduced-motion: reduce) { .ax-wiz.nudge { animation: none; } }

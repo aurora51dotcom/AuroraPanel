@@ -7359,7 +7359,11 @@
     const ex = $("#ax-wiz"); if (ex) ex.remove();
     const w = { mode: "local", name: a.id.replace(/[^a-z0-9]/g, ""), www: true, ssl: false, setup: true, subfolder: a.id.replace(/[^a-z0-9]/g, ""), host: location.hostname };
     let st = APPX.st, step = 0, job = null, timer = null, closed = false;
-    const overlay = el("div", { class: "ax-wiz-back", id: "ax-wiz", onclick: (e) => { if (e.target === overlay) close(); } });
+    // Clicking outside doesn't close it (too easy to lose what was typed) — the box just nudges.
+    const overlay = el("div", { class: "ax-wiz-back", id: "ax-wiz", onclick: (e) => {
+      if (e.target !== overlay) return;
+      sheet.classList.remove("nudge"); void sheet.offsetWidth; sheet.classList.add("nudge");
+    } });
     const sheet = el("div", { class: "ax-wiz", style: `--c:${a.color || "#ff7a1a"}`, role: "dialog", "aria-label": `Install ${a.name}` });
     const steps = ["Where", "Details", "Install"];
     const stepper = el("div", { class: "ax-steps" });
