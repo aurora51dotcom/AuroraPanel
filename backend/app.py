@@ -434,6 +434,31 @@ def api_apps2_remove(body: AppRemoveBody, user: str = auth.CurrentUser):
     return _app_call(apps.uninstall, body.path, body.drop_db, body.remove_site)
 
 
+class AppInstallBody(BaseModel):
+    app: str
+    options: dict
+
+
+@app.get("/api/apps2/catalog")
+def api_apps2_catalog(user: str = auth.CurrentUser):
+    return apps.catalog()
+
+
+@app.get("/api/apps2/latest")
+def api_apps2_latest(app_id: str, user: str = auth.CurrentUser):
+    return _app_call(apps.latest, app_id)
+
+
+@app.post("/api/apps2/preview")
+def api_apps2_preview(body: AppInstallBody, user: str = auth.CurrentUser):
+    return _app_call(apps.preview, {**body.options, "app": body.app})
+
+
+@app.post("/api/apps2/install")
+def api_apps2_install(body: AppInstallBody, user: str = auth.CurrentUser):
+    return {"job": _app_call(apps.install, body.app, body.options).id}
+
+
 @app.get("/api/apps2/password")
 def api_apps2_password(user: str = auth.CurrentUser):
     return apps.suggest_password()

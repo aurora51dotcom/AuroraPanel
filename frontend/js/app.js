@@ -145,7 +145,7 @@
     files: "folder", disk: "disk", backups: "backup", cron: "cron", indexes: "indexes",
     errorpages: "error", handlers: "handler", mime: "mime", dns: "dns",
     appmgr: "packages", sysapps: "services", phpver: "brick", password: "lock", accountprefs: "services",
-    contact: "phone", language: "globe", wordpress: "wordpress",
+    contact: "phone", language: "globe", wordpress: "wordpress", appstore: "apps", app: "apps",
     vpn: "vpn", wireguard: "tunnel", openvpn: "key", ipsec: "shield", portcheck: "plug", netmon: "radar",
     images: "image", dirprivacy: "lock", webdisk: "disk", ftpaccounts: "folder", backupwiz: "wizard", git: "git", inodes: "indexes",
     about: "info",
@@ -209,8 +209,11 @@
       }
     });
   }
+  // An app's page (#/app/<id>) belongs to the App Installer's section.
+  const navView = (view) => (view === "app" ? (state.viewArg === "wordpress" ? "wordpress" : "appstore") : view);
   function groupOf(view) {
     if (view === "dashboard") return null;
+    view = navView(view);
     if (state.group) { const g = NAV_GROUPS.find((x) => x.name === state.group); if (g && g.items.some((i) => i.view === view)) return g; }
     return NAV_GROUPS.find((g) => g.items.some((i) => i.view === view)) || null;
   }
@@ -237,13 +240,14 @@
     const pill = (label, active, onclick) => el("button", { class: `tab ${active ? "active" : ""}`, text: label, onclick });
     tabs.append(pill("Home", !g, () => navigate("dashboard")));
     if (!g) NAV_GROUPS.forEach((x) => tabs.append(pill(x.name, false, () => { state.group = x.name; navigate(x.items[0].view); })));
-    else g.items.forEach((i) => tabs.append(pill(i.label, i.view === view, () => navigate(i.view))));
+    else g.items.forEach((i) => tabs.append(pill(i.label, i.view === navView(view), () => navigate(i.view))));
     const act = tabs.querySelector(".tab.active");
     if (act && act.scrollIntoView) try { act.scrollIntoView({ block: "nearest", inline: "nearest" }); } catch (e) {}
     const user = $("#user-label").textContent;
     const h = new Date().getHours();
     const part = h < 5 ? "Good night" : h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : h < 22 ? "Good evening" : "Good night";
-    $("#view-title").textContent = g ? (TITLES[view] || view) : `${part}, ${user || "there"}!`;
+    const appName = view === "app" && APPX.cat ? (APPX.cat.apps.find((x) => x.id === state.viewArg) || {}).name : null;
+    $("#view-title").textContent = g ? (appName || TITLES[view] || view) : `${part}, ${user || "there"}!`;
     $("#view-crumb").textContent = g ? g.name : "";
   }
   function isoWeek(d) {
@@ -499,7 +503,7 @@
     pgwiz: "PostgreSQL Wizard",
     sysapps: "System Applications", appmgr: "Application Manager", phpver: "PHP Settings",
     password: "Password & Security", accountprefs: "Account Preferences",
-    contact: "Contact Information", language: "Change Language", wordpress: "WordPress",
+    contact: "Contact Information", language: "Change Language", wordpress: "WordPress", appstore: "App Installer", app: "App",
     vpn: "VPN Overview", wireguard: "WireGuard", openvpn: "OpenVPN", ipsec: "IPsec / IKEv2 (strongSwan)",
     portcheck: "Port Checker", netmon: "Network Monitor",
     images: "Images", dirprivacy: "Directory Privacy", webdisk: "Web Disk", ftpaccounts: "FTP Accounts",
@@ -599,6 +603,8 @@
       contact: viewContact,
       language: viewLanguage,
       wordpress: viewWordPress,
+      appstore: viewAppStore,
+      app: viewAppPageRoute,
       vpn: viewVPNOverview,
       wireguard: viewWireGuard,
       openvpn: viewOpenVPN,
@@ -690,6 +696,8 @@
       { label: "Users", icon: "users", view: "users" },
     ]},
     { name: "Applications", icon: "apps", tiles: [
+      { label: "App Installer", icon: "apps", view: "appstore" },
+      { label: "WordPress", icon: "wordpress", view: "wordpress" },
       { label: "System Applications", icon: "services", view: "sysapps" },
       { label: "Application Manager", icon: "packages", view: "appmgr" },
       { label: "Setup Node.js App", icon: "terminal", view: "appmgr" },
@@ -7157,162 +7165,417 @@
   // ======================================================================
   const WP_LOGO = '<svg viewBox="0 0 24 24" width="34" height="34" fill="currentColor"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm-8.8 10c0-1.3.3-2.5.8-3.6l4.2 11.6A8.8 8.8 0 0 1 3.2 12zm8.8 8.8c-.9 0-1.7-.1-2.5-.4l2.6-7.7 2.7 7.4v.1c-.9.4-1.8.6-2.8.6zm1.2-12.9c.5 0 1-.1 1-.1.5-.1.4-.8-.1-.7 0 0-1.4.1-2.3.1-.9 0-2.3-.1-2.3-.1-.5 0-.5.7-.1.7 0 0 .4.1.9.1l1.3 3.6-1.9 5.6L6.5 7.9c.5 0 1-.1 1-.1.5-.1.4-.8-.1-.7 0 0-1.4.1-2.3.1h-.5A8.8 8.8 0 0 1 17.9 5.5h-.1c-.9 0-1.5.8-1.5 1.6 0 .7.4 1.3.9 2.1.3.6.7 1.3.7 2.4 0 .7-.3 1.6-.6 2.8l-.8 2.8-3.1-9.3zm3.2 11.8 2.7-7.8c.5-1.3.7-2.3.7-3.2l-.1-.9a8.8 8.8 0 0 1-3.3 11.9z"/></svg>';
 
-  function viewWordPress(root) {
-    const w = { mode: "new_domain", setup: true };
-    let st = null;
-    const hero = el("div", { class: "wp-hero" });
-    const form = el("div", { class: "wp-grid" });
-    const list = el("div");
-    root.append(hero, form, el("h2", { class: "section-title", style: "margin-top:30px", text: "Installed WordPress sites" }), list);
-    hero.innerHTML = `<div class="wp-logo">${WP_LOGO}</div><div><h2>Install WordPress</h2><p>Downloads the latest release straight from <b>wordpress.org</b>, creates the database, writes <code>wp-config.php</code> and sets up your admin account — about a minute on a Pi 5.</p><div class="wp-checks" id="wp-checks"><span class="loading" style="padding:0">Checking PHP &amp; MariaDB…</span></div></div>`;
+  // ======================================================================
+  //  App Installer: catalog → app page → install wizard (Softaculous-style)
+  // ======================================================================
+  const APPX = { cat: null, st: null, stAt: 0 };
+  const KIND_LABEL = {
+    cli: ["1-click setup", "good", "Fully set up here, admin account included."],
+    web: ["Setup page", "warn", "Unpacked and given a database here; you finish in its own setup page."],
+    static: ["Ready to use", "good", "Nothing to set up — it works right away."],
+    composer: ["Composer", "dim", "Created with Composer, PHP's package manager."],
+    unavailable: ["Not available", "bad", ""],
+  };
+  async function appCatalog() {
+    if (!APPX.cat) APPX.cat = await API.appCatalog();
+    return APPX.cat;
+  }
+  async function appStatus(force) {
+    if (force || !APPX.st || Date.now() - APPX.stAt > 15000) { APPX.st = await API.appsStatus(); APPX.stAt = Date.now(); }
+    return APPX.st;
+  }
+  function appTile(a, size) {
+    const t = el("div", { class: `ax-tile ${size || ""}`, style: `--c:${a.color || "#ff7a1a"}` });
+    if (a.id === "wordpress") t.innerHTML = WP_LOGO;
+    else t.textContent = a.name.replace(/[^A-Za-z0-9 ]/g, "").split(/\s+/).map((w) => w[0]).join("").slice(0, 2).toUpperCase() || a.name[0];
+    return t;
+  }
+  const appMine = (st, id) => (st ? st.installed.filter((i) => i.app === id) : []);
 
-    // ---------- step 1: where ----------
-    const where = el("div", { class: "card dmm-card" });
-    const whereBody = el("div", { class: "wp-where" });
-    const preview = el("div", { class: "wp-preview" });
-    const modes = [["new_domain", "New domain"], ["subdomain", "New subdomain"], ["existing", "Existing site"], ["folder", "Custom folder"]];
-    const seg = el("div", { class: "cw-seg" }, modes.map(([m, l]) => el("button", { type: "button", class: m === w.mode ? "active" : "", text: l, onclick: (e) => {
-      w.mode = m; seg.querySelectorAll("button").forEach((b) => b.classList.toggle("active", b === e.target)); drawWhere();
-    } })));
-    where.append(el("div", { class: "cw-card-h" }, [icon("globe", 16), el("div", {}, [el("h3", { text: "1 · Where should it live?" }), el("p", { text: "Create a fresh domain for it, or drop it into a site you already have." })])]), seg, whereBody, preview);
-
-    const inp = (key, ph, extra = {}) => { const i = el("input", { type: "text", placeholder: ph, value: w[key] || "", oninput: (e) => { w[key] = e.target.value.trim(); updPreview(); }, ...extra }); return i; };
-    const chk = (key, label, def) => { if (w[key] === undefined) w[key] = def; const c = el("input", { type: "checkbox", onchange: (e) => { w[key] = e.target.checked; updPreview(); } }); c.checked = w[key]; return el("label", { class: "dm-check" }, [c, el("span", { html: label })]); };
-    const lab = (l, i, hint) => el("label", { class: "cw-lbl" }, [l, i, hint ? el("span", { class: "dm-hint", text: hint }) : null]);
-    const userSites = () => (st ? st.sites.filter((s) => !s.system) : []);
-
-    function drawWhere() {
-      whereBody.innerHTML = "";
-      if (w.mode === "new_domain") whereBody.append(
-        lab("Domain", inp("domain", "myblog.com  or  blog.test")),
-        chk("www", "Also answer on <b>www.</b>", true),
-        chk("ssl", "Enable HTTPS now (self-signed — switch to Let's Encrypt in Domains → Manage)", false));
-      if (w.mode === "subdomain") {
-        const sel = el("select", { onchange: (e) => { w.parent = e.target.value; updPreview(); } }, userSites().map((s) => el("option", { value: s.server_name.replace(/^www\./, ""), text: s.server_name.replace(/^www\./, "") })));
-        if (!w.parent && sel.options.length) w.parent = sel.value; else if (w.parent) sel.value = w.parent;
-        whereBody.append(el("div", { class: "wp-row" }, [lab("Subdomain", inp("subdomain", "blog")), el("span", { class: "wp-dot", text: "." }), lab("Of domain", sel.options.length ? sel : el("span", { class: "muted", text: "No domains yet — add one in Domains" }))]),
-          chk("ssl", "Enable HTTPS now (self-signed)", false),
-          el("p", { class: "dm-hint", text: "Remember to add the subdomain in DNS (Zone Editor → + A Record) or your hosts file." }));
+  function viewAppStore(root) {
+    let q = "", cat = state.viewArg || "all";
+    const hero = el("div", { class: "ax-hero" });
+    const body = el("div", { class: "ax-body" });
+    root.append(hero, body);
+    hero.append(el("div", { class: "ax-hero-txt" }, [
+      el("h2", {}, ["App Installer ", el("span", { class: "ax-spark", text: "✦" })]),
+      el("p", { text: "Pick an app, choose where it lives, and AuroraPanel downloads the latest release, makes its database and sets it up — blogs, shops, forums, wikis, clouds and frameworks." }),
+      el("div", { class: "wp-checks", id: "ax-checks" }, el("span", { class: "loading", style: "padding:0", text: "Checking PHP & MariaDB…" })),
+    ]));
+    const search = el("input", { type: "search", class: "ax-search", placeholder: "Search apps…  (WordPress, forum, wiki, cloud…)", oninput: (e) => { q = e.target.value.trim().toLowerCase(); draw(); } });
+    hero.append(el("div", { class: "ax-search-wrap" }, [icon("search", 16), search]));
+    let C = null, st = null;
+    function draw() {
+      if (!C) return;
+      body.innerHTML = "";
+      const mineCount = st ? st.installed.length : 0;
+      const counts = {}; C.apps.forEach((a) => { counts[a.cat] = (counts[a.cat] || 0) + 1; });
+      const rail = el("nav", { class: "ax-rail" }, [
+        ...[{ id: "all", name: "All apps", icon: "apps" }, { id: "mine", name: "My apps", icon: "folder" }, ...C.categories].map((c) => {
+          const n = c.id === "all" ? C.apps.length : c.id === "mine" ? mineCount : counts[c.id] || 0;
+          if (!n && c.id !== "mine") return null;
+          return el("button", { type: "button", class: `ax-cat${cat === c.id ? " active" : ""}`, onclick: () => {
+            cat = c.id; try { history.replaceState(null, "", `#/appstore${cat === "all" ? "" : "/" + cat}`); } catch (e) {} state.viewArg = cat === "all" ? null : cat; draw();
+          } }, [icon(c.icon, 15), el("span", { class: "ax-cat-name", text: c.name }), el("b", { text: String(n) })]);
+        }).filter(Boolean)]);
+      const main = el("div", { class: "ax-main" });
+      body.append(rail, main);
+      if (cat === "mine") { main.append(myApps(C, st)); return; }
+      const match = (a) => !q || `${a.name} ${a.tagline} ${a.cat}`.toLowerCase().includes(q);
+      const list = C.apps.filter((a) => (cat === "all" || a.cat === cat) && match(a));
+      if (cat === "all" && !q) {
+        const top = C.apps.filter((a) => a.popular);
+        main.append(el("h3", { class: "ax-h", text: "Top apps" }), el("div", { class: "ax-grid top" }, top.map((a) => appCard(a, st))));
+        // Categories flow side by side like shelves, so small ones don't leave half the page empty.
+        const shelves = el("div", { class: "ax-shelves" });
+        for (const c of C.categories) {
+          const items = C.apps.filter((a) => a.cat === c.id);
+          if (!items.length) continue;
+          shelves.append(el("section", { class: "ax-shelf" }, [
+            el("button", { type: "button", class: "ax-h ax-shelf-h", title: `Show only ${c.name}`, onclick: () => rail.querySelectorAll(".ax-cat").forEach((b) => { if (b.textContent.startsWith(c.name)) b.click(); }) },
+              [icon(c.icon, 15), " ", c.name, el("span", { class: "ax-shelf-n", text: String(items.length) })]),
+            el("div", { class: "ax-grid fit" }, items.map((a) => appCard(a, st)))]));
+        }
+        main.append(shelves);
+      } else {
+        const c = C.categories.find((x) => x.id === cat);
+        main.append(el("h3", { class: "ax-h", text: q ? `${list.length} match${list.length === 1 ? "" : "es"}` : (c ? c.name : "") }));
+        main.append(list.length ? el("div", { class: "ax-grid" }, list.map((a) => appCard(a, st))) : el("p", { class: "empty", text: "No app matches that." }));
       }
-      if (w.mode === "existing") {
-        const sel = el("select", { onchange: (e) => { w.site = e.target.value; updPreview(); } }, userSites().map((s) => el("option", { value: s.server_name, text: `${s.server_name}  —  ${s.docroot}` })));
-        if (!w.site && sel.options.length) w.site = sel.value; else if (w.site) sel.value = w.site;
-        if (w.subfolder === undefined) w.subfolder = "blog";
-        whereBody.append(lab("Site", sel.options.length ? sel : el("span", { class: "muted", text: "No sites yet — add one in Domains" })),
-          lab("Sub-folder (optional)", inp("subfolder", "blog  →  example.com/blog"), "Leave empty to install at the site's root."),
-          chk("overwrite", "Install even if the folder already has files", false));
-      }
-      if (w.mode === "folder") whereBody.append(
-        lab("Folder", inp("path", "/var/www/html/wordpress")),
-        lab("It will be reachable at", inp("url", `http://${location.hostname}/wordpress`), "The folder must already be served by Apache at this address."),
-        chk("overwrite", "Install even if the folder already has files", false));
-      updPreview();
     }
-    function target() {
-      const sub = (w.subfolder || "").replace(/^\/+|\/+$/g, "");
-      if (w.mode === "new_domain" && w.domain) return { url: `${w.ssl ? "https" : "http"}://${w.domain.toLowerCase()}`, path: `/var/www/${w.domain.toLowerCase()}` };
-      if (w.mode === "subdomain" && w.subdomain && w.parent) { const h = `${w.subdomain.toLowerCase()}.${w.parent}`; return { url: `${w.ssl ? "https" : "http"}://${h}`, path: `/var/www/${h}` }; }
-      if (w.mode === "existing" && w.site) { const s = userSites().find((x) => x.server_name === w.site); if (s) return { url: `${s.ssl !== "none" ? "https" : "http"}://${s.server_name}${sub ? "/" + sub : ""}`, path: `${s.docroot}${sub ? "/" + sub : ""}` }; }
-      if (w.mode === "folder" && w.path) return { url: w.url || "?", path: w.path };
-      return null;
+    function appCard(a, st) {
+      const [kl, kc, kd] = KIND_LABEL[a.kind];
+      const mine = appMine(st, a.id).length;
+      return el("div", { class: `ax-card${a.kind === "unavailable" ? " off" : ""}`, style: `--c:${a.color || "#ff7a1a"}` }, [
+        el("div", { class: "ax-card-top" }, [appTile(a), el("div", { class: "ax-card-name" }, [el("b", { text: a.name }), el("span", { class: `pill ${kc}`, title: kd || a.why || "", text: kl })])]),
+        el("p", { text: a.tagline }),
+        el("div", { class: "ax-card-btns" }, [
+          a.kind === "unavailable" ? el("span", { class: "muted ax-why", text: a.why }) :
+            el("button", { class: "btn btn-sm btn-primary", onclick: (e) => { e.stopPropagation(); openAppWizard(a, () => draw()); } }, [icon("gear", 13), " Install"]),
+          el("button", { class: "btn btn-sm btn-ghost", text: "Details", onclick: () => navigate("app", { arg: a.id }) }),
+          mine ? el("button", { class: "ax-mine", title: "Show your installs", text: `✓ ${mine} installed`, onclick: () => navigate("app", { arg: a.id }) }) : null,
+        ]),
+      ]);
     }
-    function updPreview() {
-      const t = target();
-      preview.innerHTML = t ? `${I("link", 14)}<span><b>${esc(t.url)}/</b></span><span class="muted">→</span><code>${esc(t.path)}</code>` : `<span class="muted">Fill in the details to see where WordPress will go.</span>`;
-    }
+    const load = () => guardedLoad(async () => {
+      C = await appCatalog(); draw();
+      st = await appStatus(true); draw();
+      appChecks($("#ax-checks", hero), st);
+    });
+    state.refreshHandler = load; load();
+  }
 
-    // ---------- step 2: site ----------
-    const siteCard = el("div", { class: "card dmm-card" });
-    const pw = el("input", { type: "password", placeholder: "at least 10 characters", autocomplete: "new-password", oninput: (e) => { w.admin_pass = e.target.value; meter(); } });
-    const pwMeter = el("div", { class: "wp-meter" }, el("span"));
-    function meter() {
-      const v = pw.value; let s = 0;
-      if (v.length >= 10) s++; if (v.length >= 16) s++; if (/[A-Z]/.test(v) && /[a-z]/.test(v)) s++; if (/\d/.test(v)) s++; if (/[^A-Za-z0-9]/.test(v)) s++;
-      pwMeter.firstChild.style.width = `${(s / 5) * 100}%`; pwMeter.className = `wp-meter s${s}`;
+  function appChecks(host, st) {
+    if (!host) return;
+    host.innerHTML = "";
+    const ok = (b, t, tip) => el("span", { class: `pill ${b ? "good" : "bad"}`, title: tip || "", text: `${b ? "✓" : "✕"} ${t}` });
+    host.append(ok(!!st.php_bin, `PHP ${st.php_version || "missing"}`, st.php_bin ? "" : "Install Apache + PHP in System Applications"),
+      ok(st.mysql, "MariaDB", st.mysql ? "" : "Install MariaDB in System Applications"),
+      el("span", { class: "pill dim", text: `${st.installed.length} app${st.installed.length === 1 ? "" : "s"} installed` }));
+  }
+
+  function myApps(C, st) {
+    const box = el("div");
+    if (!st || !st.installed.length) {
+      box.append(el("div", { class: "cw-empty" }, [icon("apps", 28), el("b", { text: "No apps installed yet" }), el("span", { class: "muted", text: "Pick one from the catalog — it takes a minute." })]));
+      return box;
     }
-    const gen = el("button", { type: "button", class: "btn btn-sm", onclick: async () => { try { const r = await API.appPassword(); pw.value = r.password; pw.type = "text"; w.admin_pass = r.password; meter(); } catch (e) { toast(e.message, "bad"); } } }, [icon("refresh", 12), " Generate"]);
-    const eye = el("button", { type: "button", class: "btn btn-sm btn-ghost", text: "Show", onclick: () => { pw.type = pw.type === "password" ? "text" : "password"; eye.textContent = pw.type === "password" ? "Show" : "Hide"; } });
-    const setupBox = el("div", { class: "wp-setup" }, [
-      lab("Site title", inp("title", "My WordPress Site")),
-      el("div", { class: "dm-row2 wp-two" }, [lab("Admin username", inp("admin_user", "not “admin”", { autocomplete: "off" })), lab("Admin email", inp("admin_email", "you@example.com", { type: "email" }))]),
-      el("label", { class: "cw-lbl" }, ["Admin password", el("div", { class: "wp-pw" }, [pw, eye, gen]), pwMeter, el("span", { class: "dm-hint", text: "Save it in your password manager — AuroraPanel doesn't keep a copy." })]),
-      chk("hide_search", "Ask search engines not to index this site (good for test sites)", false),
-    ]);
-    const setupToggle = el("div", { class: "dm-trow" }, [el("div", {}, [el("b", { text: "Set up the admin account now" }), el("span", { text: "Off = you'll finish WordPress's “famous 5-minute install” in the browser." })]),
-      sw(true, (v) => { w.setup = v; setupBox.classList.toggle("dm-dim", !v); })]);
-    siteCard.append(el("div", { class: "cw-card-h" }, [icon("users", 16), el("div", {}, [el("h3", { text: "2 · Your site" }), el("p", { text: "Title and the administrator you'll log in with." })])]), setupToggle, setupBox);
+    box.append(el("h3", { class: "ax-h", text: "My apps" }), installedList(st.installed, C, () => { APPX.stAt = 0; state.refreshHandler && state.refreshHandler(); }));
+    return box;
+  }
 
-    // ---------- install ----------
-    const log = el("pre", { class: "log wp-log", hidden: true });
-    const result = el("div");
-    const go = el("button", { class: "btn btn-primary wp-go", onclick: install }, [el("span", { class: "wp-go-ico", html: WP_LOGO }), el("span", { text: "Install WordPress" })]);
-    form.append(where, siteCard, el("div", { class: "wp-actions" }, [el("span", { class: "dm-hint", text: "Needs Apache + PHP + MariaDB. Missing PHP extensions are installed automatically." }), go]), log, result);
-
-    async function install() {
-      const t = target();
-      if (!t) return toast("Tell me where to install it first", "bad");
-      const o = { mode: w.mode, domain: w.domain, www: w.www, ssl: w.ssl, subdomain: w.subdomain, parent: w.parent, site: w.site,
-        subfolder: w.subfolder, path: w.path, url: w.url, overwrite: w.overwrite, setup: w.setup,
-        title: w.title || "My WordPress Site", admin_user: w.admin_user, admin_email: w.admin_email, admin_pass: pw.value, public: !w.hide_search };
-      go.disabled = true; result.innerHTML = ""; log.hidden = false; log.textContent = "Starting…";
-      try {
-        const r = await API.wpInstall(o);
-        const tick = async () => {
-          const j = await API.job(r.job);
-          log.textContent = j.output || "…"; log.scrollTop = log.scrollHeight;
-          if (j.status === "running") return setTimeout(tick, 1200);
-          go.disabled = false;
-          if (j.status === "done" && j.result) {
-            const e = j.result;
-            result.append(el("div", { class: "wp-done" }, [
-              el("div", { class: "wp-logo", html: WP_LOGO }),
-              el("div", {}, [el("h3", { text: `WordPress ${e.version || ""} is ready 🎉` }),
-                el("p", { class: "muted", html: `Files: <code>${esc(e.path)}</code> · Database: <code>${esc(e.db)}</code>` }),
-                el("div", { class: "wp-links" }, [
-                  el("a", { class: "btn btn-sm", href: e.url + "/", target: "_blank", rel: "noopener" }, [icon("link", 13), " Visit site"]),
-                  el("a", { class: "btn btn-sm btn-primary", href: e.url + (o.setup ? "/wp-admin/" : "/wp-admin/install.php"), target: "_blank", rel: "noopener" }, [icon("lock", 13), o.setup ? " Open WP Admin" : " Finish setup"]),
-                ]),
-                /\.(test|local|localhost)(\/|$)/.test(e.url) ? el("p", { class: "dm-hint", text: "Local domain: add it to your computer's hosts file (Domains → 🔍 shows the exact line)." }) : null,
-              ]),
-            ]));
-            pw.value = ""; w.admin_pass = ""; toast("WordPress installed", "good"); loadList();
-          } else toast("Install failed — see the log", "bad");
-        };
-        tick();
-      } catch (e) { go.disabled = false; log.hidden = true; toast(e.message, "bad"); }
-    }
-
-    async function loadList() {
-      list.innerHTML = "";
-      if (!st.installed.length) { list.append(el("div", { class: "cw-empty" }, [el("div", { class: "wp-logo", html: WP_LOGO }), el("b", { text: "No WordPress sites yet" }), el("span", { class: "muted", text: "Your first one is two steps away." })])); return; }
-      list.append(el("div", { class: "wp-list" }, st.installed.map((it) => el("div", { class: `wp-item ${it.exists ? "" : "gone"}` }, [
-        el("div", { class: "wp-logo sm", html: WP_LOGO }),
+  function installedList(items, C, reload) {
+    return el("div", { class: "wp-list" }, items.map((it) => {
+      const a = C.apps.find((x) => x.id === it.app) || { id: it.app, name: it.app, color: "#888" };
+      const open = it.url ? el("a", { class: "btn btn-sm", href: it.url + "/", target: "_blank", rel: "noopener" }, [icon("link", 12), " Open"]) : null;
+      const admin = it.setup_url ? el("a", { class: "btn btn-sm btn-primary", href: it.setup_url, target: "_blank", rel: "noopener" }, [icon("wand", 12), " Finish setup"])
+        : it.admin_url ? el("a", { class: "btn btn-sm", href: it.admin_url, target: "_blank", rel: "noopener" }, [icon("lock", 12), " Admin"]) : null;
+      return el("div", { class: `wp-item ${it.exists ? "" : "gone"}` }, [
+        appTile(a, "sm"),
         el("div", { class: "wp-item-main" }, [
           el("b", { text: it.url || it.path }),
-          el("span", { class: "muted", html: `<code>${esc(it.path)}</code>${it.db ? ` · DB <code>${esc(it.db)}</code>` : ""}` }),
-          el("span", { class: "dm-tags" }, [it.version ? el("span", { class: "pill good", text: "v" + it.version }) : null, it.detected ? el("span", { class: "pill dim", text: "found on disk" }) : null, !it.exists ? el("span", { class: "pill bad", text: "folder missing" }) : null]),
+          el("span", { class: "muted", html: `${esc(a.name)} · <code>${esc(it.path)}</code>${it.db ? ` · DB <code>${esc(it.db)}</code>` : ""}` }),
+          el("span", { class: "dm-tags" }, [it.version && it.version !== "latest" ? el("span", { class: "pill good", text: "v" + it.version }) : null,
+            it.detected ? el("span", { class: "pill dim", text: "found on disk" }) : null, !it.exists ? el("span", { class: "pill bad", text: "folder missing" }) : null,
+            it.installed ? el("span", { class: "pill dim", text: new Date(it.installed * 1000).toLocaleDateString() }) : null]),
         ]),
-        el("div", { class: "actions" }, [
-          it.url ? el("a", { class: "btn btn-sm", href: it.url + "/", target: "_blank", rel: "noopener" }, [icon("link", 12), " Site"]) : null,
-          it.url ? el("a", { class: "btn btn-sm", href: it.url + "/wp-admin/", target: "_blank", rel: "noopener" }, [icon("lock", 12), " Admin"]) : null,
+        el("div", { class: "actions ax-item-btns" }, [open, admin,
           el("button", { class: "btn btn-sm btn-danger", onclick: async () => {
-            if (!confirmInline(`Remove WordPress at ${it.url || it.path}?\n\nFiles are moved to /var/lib/aurora/trash (recoverable) and the database ${it.db || ""} is DELETED.`)) return;
-            const rmSite = it.created_site && confirmInline("Also remove the Apache site that was created for it?");
-            try { const r = await API.appRemove2(it.path, true, rmSite); toast(`Removed · files kept in ${r.files_moved_to}`, "good"); load(); } catch (e) { toast(e.message, "bad"); }
-          } }, [icon("error", 12), " Remove"]),
-        ]),
-      ]))));
-    }
-    const load = async () => {
-      await guardedLoad(async () => {
-        st = await API.appsStatus();
-        const ok = (b, t) => `<span class="pill ${b ? "good" : "bad"}">${b ? "✓" : "✕"} ${esc(t)}</span>`;
-        $("#wp-checks", hero).innerHTML = ok(!!st.php_bin, `PHP ${st.php_version || "?"}`) + ok(st.mysql, "MariaDB")
-          + (st.php_missing.length ? `<span class="pill warn" title="Installed automatically during setup">+ ${esc(st.php_missing.join(", "))}</span>` : `<span class="pill good">✓ all PHP extensions</span>`);
-        drawWhere(); loadList();
-      });
-    };
+            if (!confirmInline(`Remove ${a.name} at ${it.url || it.path}?\n\nFiles are moved to /var/lib/aurora/trash (recoverable)${it.db ? ` and the database ${it.db} is DELETED` : ""}.`)) return;
+            const rmSite = it.created_site && confirmInline("Also remove the site that was created for it?");
+            try { const r = await API.appRemove2(it.path, true, !!rmSite); toast(`Removed · files kept in ${r.files_moved_to}`, "good"); reload(); } catch (e) { toast(e.message, "bad"); }
+          } }, [icon("error", 12), " Remove"])]),
+      ]);
+    }));
+  }
+
+  function viewWordPress(root) { viewAppPage(root, "wordpress"); }
+  function viewAppPageRoute(root) { viewAppPage(root, state.viewArg || "wordpress"); }
+
+  function viewAppPage(root, id) {
+    const load = () => guardedLoad(async () => {
+      const C = await appCatalog();
+      const a = C.apps.find((x) => x.id === id);
+      root.innerHTML = "";
+      if (!a) { root.append(el("div", { class: "cw-empty" }, [icon("error", 28), el("b", { text: "Unknown app" }), btn("← App Installer", () => navigate("appstore"))])); return; }
+      const st = await appStatus(true);
+      const vt = $("#view-title"); if (vt) vt.textContent = a.name;
+      const [kl, kc, kd] = KIND_LABEL[a.kind];
+      const ver = el("span", { class: "pill dim", text: a.kind === "composer" ? "latest via Composer" : "checking version…" });
+      const installBtn = a.kind === "unavailable" ? null : el("button", { class: "btn btn-primary ax-go", style: `--c:${a.color}`, onclick: () => openAppWizard(a, load) },
+        [el("span", { class: "ax-gear" }, icon("gear", 18)), el("span", { text: `Install ${a.name}` })]);
+      root.append(
+        el("button", { class: "btn btn-sm btn-ghost ax-back", onclick: () => navigate("appstore", { arg: a.cat }) }, [el("span", { html: "&larr;" }), " App Installer"]),
+        el("div", { class: "ax-app-hero", style: `--c:${a.color || "#ff7a1a"}` }, [
+          appTile(a, "lg"),
+          el("div", { class: "ax-app-txt" }, [
+            el("h2", { text: a.name }),
+            el("p", { text: a.tagline }),
+            el("div", { class: "wp-checks" }, [el("span", { class: `pill ${kc}`, title: kd, text: kl }), ver,
+              a.db ? el("span", { class: "pill dim", text: "MariaDB database" }) : el("span", { class: "pill dim", text: "No database" }),
+              ...(a.missing_exts || []).length ? [el("span", { class: "pill warn", title: "Installed automatically during setup", text: `+ PHP ${a.missing_exts.join(", ")}` })] : [],
+              el("a", { class: "pill dim ax-site", href: a.site, target: "_blank", rel: "noopener noreferrer", text: "Website ↗" })]),
+            a.kind === "unavailable" ? el("div", { class: "dm-note warn", style: "margin-top:14px" }, [icon("info", 15), el("span", { text: a.why })]) : el("p", { class: "dm-hint", text: kd }),
+          ]),
+          installBtn ? el("div", { class: "ax-app-cta" }, installBtn) : null,
+        ]));
+      const mine = appMine(st, a.id);
+      root.append(el("div", { class: "ax-mine-head" }, [el("h2", { class: "section-title", text: `Your ${a.name} installs` }),
+        el("span", { class: "grow" }), mine.length && installBtn ? el("button", { class: "btn btn-sm", onclick: () => openAppWizard(a, load) }, [icon("gear", 13), " Install another"]) : null]));
+      root.append(mine.length ? installedList(mine, C, load)
+        : el("div", { class: "cw-empty ax-empty" }, [appTile(a, "md"), el("b", { text: `No ${a.name} yet` }),
+          el("span", { class: "muted", text: a.kind === "unavailable" ? a.why : "One click on Install and a minute later it's running." }),
+          installBtn ? el("button", { class: "btn btn-primary", onclick: () => openAppWizard(a, load) }, [icon("gear", 13), ` Install ${a.name}`]) : null]));
+      if (a.kind !== "composer" && a.kind !== "unavailable") {
+        API.appLatest(a.id).then((r) => { ver.textContent = `${r.version && r.version !== "latest" ? "v" + r.version : "Latest release"}${r.size ? " · " + fmtBytes(r.size) : ""}`; ver.className = "pill good"; })
+          .catch(() => { ver.textContent = "version check failed"; });
+      }
+    });
     state.refreshHandler = load; load();
+  }
+
+  // ---------------------------------------------------------------- wizard
+  function openAppWizard(a, onDone) {
+    const ex = $("#ax-wiz"); if (ex) ex.remove();
+    const w = { mode: "local", name: a.id.replace(/[^a-z0-9]/g, ""), www: true, ssl: false, setup: true, subfolder: a.id.replace(/[^a-z0-9]/g, ""), host: location.hostname };
+    let st = APPX.st, step = 0, job = null, timer = null, closed = false;
+    const overlay = el("div", { class: "ax-wiz-back", id: "ax-wiz", onclick: (e) => { if (e.target === overlay) close(); } });
+    const sheet = el("div", { class: "ax-wiz", style: `--c:${a.color || "#ff7a1a"}`, role: "dialog", "aria-label": `Install ${a.name}` });
+    const steps = ["Where", "Details", "Install"];
+    const stepper = el("div", { class: "ax-steps" });
+    const content = el("div", { class: "ax-wiz-body" });
+    const foot = el("div", { class: "ax-wiz-foot" });
+    sheet.append(el("div", { class: "ax-wiz-head" }, [appTile(a, "sm"), el("div", {}, [el("h3", { text: `Install ${a.name}` }), el("span", { class: "muted", text: a.tagline })]),
+      el("span", { class: "grow" }), el("button", { class: "btn btn-sm btn-ghost", "aria-label": "Close", text: "✕", onclick: () => close() })]), stepper, content, foot);
+    overlay.append(sheet); document.body.append(overlay);
+    const onKey = (e) => { if (e.key === "Escape") close(); };
+    document.addEventListener("keydown", onKey);
+    function close() {
+      if (job && job.status === "running") toast(`${a.name} keeps installing in the background — you'll get a message when it's done`, "good");
+      closed = true; overlay.remove(); document.removeEventListener("keydown", onKey);
+      if (!(job && job.status === "running")) clearInterval(timer);
+    }
+    function drawSteps() {
+      stepper.innerHTML = "";
+      steps.forEach((s, i) => stepper.append(el("div", { class: `ax-step${i === step ? " on" : ""}${i < step ? " done" : ""}` }, [el("span", { text: i < step ? "✓" : String(i + 1) }), el("b", { text: s })]),
+        i < steps.length - 1 ? el("i") : ""));
+    }
+    const inp = (key, ph, extra = {}) => el("input", { type: "text", placeholder: ph, value: w[key] == null ? "" : w[key], oninput: (e) => { w[key] = e.target.value.trim(); check(); }, ...extra });
+    const lab = (l, i, hint) => el("label", { class: "cw-lbl" }, [l, i, hint ? el("span", { class: "dm-hint", text: hint }) : null]);
+    const chk = (key, label) => { const c = el("input", { type: "checkbox", onchange: (e) => { w[key] = e.target.checked; check(); } }); c.checked = !!w[key]; return el("label", { class: "dm-check" }, [c, el("span", { html: label })]); };
+    const preview = el("div", { class: "ax-preview" });
+    let pvTimer = null, pvOk = false;
+    function opts() {
+      return { mode: w.mode, name: w.name, path: w.mode === "folder" || (w.mode === "local" && w.pathTouched) ? w.path : "", url: w.url, ip: w.ip, domain: w.domain,
+        www: w.www, ssl: w.ssl, subdomain: w.subdomain, parent: w.parent, site: w.site, subfolder: w.mode === "existing" ? w.subfolder : "",
+        overwrite: w.overwrite, host: w.host, setup: w.setup, title: w.title, admin_user: w.admin_user, admin_email: w.admin_email, admin_pass: w.admin_pass,
+        hide_search: w.hide_search };
+    }
+    function check() {
+      clearTimeout(pvTimer);
+      preview.className = "ax-preview busy";
+      pvTimer = setTimeout(async () => {
+        try {
+          const r = await API.appPreview(a.id, opts());
+          pvOk = r.ok;
+          preview.className = `ax-preview ${r.ok ? "ok" : "bad"}`;
+          preview.innerHTML = "";
+          if (r.path) preview.append(el("div", { class: "ax-pv-row" }, [icon("link", 14), el("b", { text: r.url + "/" })]), el("div", { class: "ax-pv-row muted" }, [icon("folder", 14), el("code", { text: r.path })]));
+          if (r.error) preview.append(el("div", { class: "ax-pv-err" }, [icon("error", 14), el("span", { text: r.error })]));
+        } catch (e) { pvOk = false; preview.className = "ax-preview bad"; preview.textContent = e.message; }
+        drawFoot();
+      }, 280);
+    }
+    const userSites = () => (st ? st.sites.filter((s) => !s.system && s.enabled) : []);
+    function stepWhere() {
+      const modes = [["local", "Local", `${location.hostname}/name`], ["ip", "IP address", "a site of its own"], ["new_domain", "Domain", "example.com, blog.test"],
+        ["subdomain", "Subdomain", "blog.example.com"], ["existing", "Existing site", "into a site you have"], ["folder", "Custom folder", "any folder"]];
+      const seg = el("div", { class: "ax-modes" }, modes.map(([m, l, d]) => el("button", { type: "button", class: m === w.mode ? "on" : "", onclick: () => { w.mode = m; render(); } }, [el("b", { text: l }), el("span", { text: d })])));
+      const box = el("div", { class: "ax-where" });
+      if (w.mode === "local") {
+        const base = (st && st.folder_base) || "/var/www/html";
+        const path = el("input", { type: "text", class: "cw-mono", value: w.pathTouched ? w.path : `${base}/${w.name || ""}`, oninput: (e) => { w.path = e.target.value.trim(); w.pathTouched = !!w.path; check(); } });
+        const name = inp("name", "blog", { oninput: (e) => { w.name = e.target.value.trim().toLowerCase(); if (!w.pathTouched) path.value = `${base}/${w.name}`; check(); } });
+        box.append(lab("Site name", el("div", { class: "dm-prefix" }, [el("span", { text: `${location.hostname}/` }), name]), "No domain needed — it answers on this Pi's address."),
+          lab("Folder", path, "Created for you. Change it only if you want the files elsewhere."));
+      }
+      if (w.mode === "ip") box.append(lab("IP address", inp("ip", "192.168.0.50"), `Another address of this Pi. This Pi's own address (${location.hostname}) becomes ${location.hostname}/${w.name || a.id} instead.`));
+      if (w.mode === "new_domain") box.append(lab("Domain", inp("domain", "myblog.com  or  blog.test")), chk("www", "Also answer on <b>www.</b>"), chk("ssl", "Turn on HTTPS now <span class='muted'>(self-signed — switch to Let's Encrypt in Domains)</span>"));
+      if (w.mode === "subdomain") {
+        const sites2 = userSites().filter((s) => !isIp(s.server_name));
+        const sel = el("select", { onchange: (e) => { w.parent = e.target.value; check(); } }, sites2.map((s) => el("option", { value: s.server_name.replace(/^www\./, ""), text: s.server_name.replace(/^www\./, "") })));
+        if (!w.parent && sites2.length) w.parent = sel.value; else if (w.parent) sel.value = w.parent;
+        box.append(el("div", { class: "wp-row" }, [lab("Subdomain", inp("subdomain", "blog")), el("span", { class: "wp-dot", text: "." }), lab("Of domain", sites2.length ? sel : el("span", { class: "muted", text: "No domains yet — add one in Domains" }))]),
+          chk("ssl", "Turn on HTTPS now (self-signed)"), el("p", { class: "dm-hint", text: "Add the subdomain in DNS (Zone Editor → A record) or your computer's hosts file." }));
+      }
+      if (w.mode === "existing") {
+        const opts2 = [];
+        (st ? st.sites.filter((s) => s.system && s.has_http && s.enabled) : []).forEach((s) => opts2.push([s.conf, `${location.hostname} — this Pi's address (${s.docroot})`]));
+        (st ? st.folder_sites : []).forEach((f) => opts2.push([`folder:${f.name}`, `${location.hostname}/${f.name} — folder site (${f.path})`]));
+        userSites().forEach((s) => opts2.push([s.server_name, `${s.server_name} — ${s.docroot}`]));
+        const sel = el("select", { onchange: (e) => { w.site = e.target.value; check(); } }, opts2.map(([v, t]) => el("option", { value: v, text: t })));
+        if (!w.site && opts2.length) w.site = sel.value; else if (w.site) sel.value = w.site;
+        box.append(lab("Site", opts2.length ? sel : el("span", { class: "muted", text: "No sites yet" })),
+          lab("Sub-folder", inp("subfolder", `${a.id}  →  example.com/${a.id}`), "Leave empty to install at the site's root."), chk("overwrite", "Install even if the folder already has files"));
+      }
+      if (w.mode === "folder") box.append(lab("Folder", inp("path", "/var/www/html/blog", { class: "cw-mono" })),
+        lab("Its address (optional)", inp("url", `${location.hostname}/blog`), "Leave empty: AuroraPanel finds it — or, if nothing serves that folder yet, makes it a local site at /<folder name>."),
+        chk("overwrite", "Install even if the folder already has files"));
+      content.append(el("h4", { class: "ax-q", text: "Where should it live?" }), seg, box, preview);
+      check();
+    }
+    function stepDetails() {
+      const pw = el("input", { type: "password", placeholder: "at least 12 characters", autocomplete: "new-password", value: w.admin_pass || "", oninput: (e) => { w.admin_pass = e.target.value; meter(); drawFoot(); } });
+      const pwMeter = el("div", { class: "wp-meter" }, el("span"));
+      function meter() { const v = pw.value; let s = 0; if (v.length >= 12) s++; if (v.length >= 16) s++; if (/[A-Z]/.test(v) && /[a-z]/.test(v)) s++; if (/\d/.test(v)) s++; if (/[^A-Za-z0-9]/.test(v)) s++; pwMeter.firstChild.style.width = `${(s / 5) * 100}%`; pwMeter.className = `wp-meter s${s}`; }
+      const gen = el("button", { type: "button", class: "btn btn-sm", onclick: async () => { try { const r = await API.appPassword(); pw.value = r.password; pw.type = "text"; w.admin_pass = r.password; eye.textContent = "Hide"; meter(); drawFoot(); } catch (e) { toast(e.message, "bad"); } } }, [icon("refresh", 12), " Generate"]);
+      const eye = el("button", { type: "button", class: "btn btn-sm btn-ghost", text: "Show", onclick: () => { pw.type = pw.type === "password" ? "text" : "password"; eye.textContent = pw.type === "password" ? "Show" : "Hide"; } });
+      const fields = el("div", { class: "wp-setup" }, [
+        lab(a.cat === "forums" ? "Forum name" : a.cat === "wikis" ? "Wiki name" : "Site title", inp("title", `My ${a.name} site`)),
+        el("div", { class: "dm-row2 wp-two" }, [a.fixed_user ? lab("Admin username", el("input", { type: "text", value: a.fixed_user, disabled: "" }), `${a.name} always names the first account “${a.fixed_user}”.`)
+          : lab("Admin username", inp("admin_user", "not “admin”", { autocomplete: "off" })), lab("Admin email", inp("admin_email", "you@example.com", { type: "email" }))]),
+        el("label", { class: "cw-lbl" }, ["Admin password", el("div", { class: "wp-pw" }, [pw, eye, gen]), pwMeter,
+          el("span", { class: "dm-hint", text: a.strong_pw ? "Mix upper- and lower-case letters and a number. Save it in your password manager — AuroraPanel doesn't keep a copy." : "Save it in your password manager — AuroraPanel doesn't keep a copy." })]),
+        a.id === "wordpress" ? chk("hide_search", "Ask search engines not to index this site (good for test sites)") : null,
+      ]);
+      content.append(el("h4", { class: "ax-q", text: a.kind === "cli" && a.admin !== false ? "Your site and admin account" : "Your site" }));
+      if (a.kind === "cli" && a.admin !== false) {
+        if (a.optional_setup) {
+          content.append(el("div", { class: "dm-trow" }, [el("div", {}, [el("b", { text: "Set up the admin account now" }), el("span", { text: `Off = you'll finish ${a.name}'s own setup in the browser.` })]),
+            sw(w.setup, (v) => { w.setup = v; fields.classList.toggle("dm-dim", !v); drawFoot(); })]));
+          fields.classList.toggle("dm-dim", !w.setup);
+        }
+        content.append(fields); meter();
+      } else {
+        content.append(lab("Name (for your list)", inp("title", `My ${a.name}`)),
+          el("div", { class: "dm-note" }, [icon("info", 15), el("span", { text: a.kind === "web" ? `${a.name} sets up its admin account in its own setup page. AuroraPanel downloads it, ${a.db ? "creates its database (you'll get the details to paste), " : ""}fixes permissions and opens the setup page for you.`
+            : a.kind === "composer" ? `AuroraPanel runs Composer to create a fresh ${a.name} project${a.composer_lib ? " with a small demo page" : ""}. Edit it in the File Manager or over FTP/Git.`
+            : a.first_login || `${a.name} is ready as soon as it's unpacked.` })]),
+          a.first_login && a.kind !== "static" ? el("div", { class: "dm-note warn" }, [icon("lock", 15), el("span", { text: a.first_login })]) : "");
+      }
+    }
+    function stepInstall() {
+      const p = opts();
+      const where = preview.querySelector("b") ? preview.querySelector("b").textContent : "";
+      const sum = el("div", { class: "ax-summary" }, [
+        appTile(a, "md"),
+        el("div", {}, [el("b", { text: `${a.name} → ${where}` }), el("span", { class: "muted", text: `${preview.querySelector("code") ? preview.querySelector("code").textContent : ""}${a.db ? " · new MariaDB database" : ""}${p.setup && a.kind === "cli" && a.admin !== false ? ` · admin “${a.fixed_user || p.admin_user}”` : ""}` })]),
+      ]);
+      const bar = el("div", { class: "ax-bar" }, el("span"));
+      const stage = el("div", { class: "ax-stage", text: "Ready when you are." });
+      const checklist = el("ul", { class: "ax-check" });
+      const STEPS = [["Check PHP & extensions", 0], [a.kind === "composer" ? "Create the project with Composer" : "Download the latest release", 8], [a.kind === "composer" ? "Composer packages" : "Unpack", 56],
+        [a.db ? "Create the database" : "Prepare", 62], [`Set up ${a.name}`, 66], ["Permissions & Apache", 92]];
+      const items = STEPS.map(([t]) => el("li", { text: t }));
+      checklist.append(...items);
+      const log = el("pre", { class: "log ax-log", hidden: true });
+      const logBtn = el("button", { type: "button", class: "bk-mini", text: "Show log", onclick: () => { log.hidden = !log.hidden; logBtn.textContent = log.hidden ? "Show log" : "Hide log"; } });
+      const result = el("div");
+      content.append(el("h4", { class: "ax-q", text: "Ready to install" }), sum, el("div", { class: "ax-progress" }, [el("div", { class: "ax-prog-top" }, [stage, logBtn]), bar, checklist, log]), result);
+      content._go = async (goBtn) => {
+        goBtn.disabled = true; goBtn.textContent = "Installing…";
+        try {
+          const r = await API.appInstall(a.id, opts());
+          job = { id: r.job, status: "running" };
+          sheet.classList.add("busy");
+          const backBtn = foot.firstChild;
+          if (backBtn) backBtn.style.visibility = "hidden";  // no going back while it installs
+          const t0 = Date.now();
+          const tick = async () => {
+            let j;
+            try { j = await API.job(r.job); } catch (e) { return; }
+            job.status = j.status;
+            const pct = j.progress == null ? 2 : j.progress;
+            bar.firstChild.style.width = `${Math.max(2, pct)}%`;
+            const secs = (Date.now() - t0) / 1000;
+            stage.innerHTML = "";
+            stage.append(el("span", { class: "bk-spin" }), el("b", { text: j.stage || "Working…" }), el("span", { class: "bk-pct", text: `${Math.floor(pct)}%` }),
+              el("span", { class: "muted", text: ` · ${Math.floor(secs / 60)}:${String(Math.floor(secs % 60)).padStart(2, "0")}` }));
+            STEPS.forEach(([, at], i) => { const next = STEPS[i + 1] ? STEPS[i + 1][1] : 101; items[i].className = pct >= next || j.status === "done" ? "done" : pct >= at ? "on" : ""; });
+            log.textContent = j.output || ""; log.scrollTop = log.scrollHeight;
+            if (j.status === "running") return;
+            clearInterval(timer); sheet.classList.remove("busy");
+            APPX.stAt = 0;
+            if (j.status === "done") {
+              bar.parentNode.classList.add("ok"); bar.firstChild.style.width = "100%";
+              stage.innerHTML = ""; stage.append(el("span", { class: "bk-badge good", text: "✓" }), el("b", { text: `${a.name} is installed` }), el("span", { class: "muted", text: ` · took ${Math.round(secs)}s` }));
+              if (closed) toast(`${a.name} is installed — ${j.result.url}/`, "good");
+              step = 3; drawSteps();  // every step ticked
+              showDone(j.result); onDone && onDone();
+              goBtn.replaceWith(el("button", { class: "btn btn-primary", text: "Done", onclick: close }));
+            } else {
+              bar.parentNode.classList.add("bad");
+              const last = (j.output || "").trim().split("\n").filter(Boolean).pop() || "Install failed";
+              stage.innerHTML = ""; stage.append(el("span", { class: "bk-badge bad", text: "!" }), el("b", { text: "Install failed" }));
+              result.innerHTML = ""; result.append(el("div", { class: "ax-fail" }, [el("b", { text: last.replace(/^✖\s*/, "") }), el("span", { class: "muted", text: "Nothing was left half-installed. Fix the problem and try again." })]));
+              log.hidden = false; logBtn.textContent = "Hide log";
+              if (closed) toast(`${a.name} install failed — open the app page to retry`, "bad");
+              goBtn.disabled = false; goBtn.textContent = "Try again";
+              if (backBtn) backBtn.style.visibility = "";
+            }
+          };
+          timer = setInterval(tick, 1000); tick();
+        } catch (e) { toast(e.message, "bad"); goBtn.disabled = false; goBtn.textContent = `Install ${a.name}`; }
+      };
+      function showDone(e) {
+        result.innerHTML = "";
+        const copy = (v) => el("button", { type: "button", class: "bk-mini", text: "Copy", onclick: (ev) => { try { navigator.clipboard.writeText(v); ev.target.textContent = "Copied"; } catch (x) {} } });
+        const rows = [];
+        if (e.db && e.db_pass) rows.push(["Database", e.db], ["DB user", e.db_user], ["DB password", e.db_pass], ["DB host", "localhost"]);
+        result.append(el("div", { class: "ax-done" }, [
+          el("div", { class: "ax-done-glow" }),
+          el("h3", { text: `${a.name} ${e.version && e.version !== "latest" ? e.version + " " : ""}is ready 🎉` }),
+          el("div", { class: "wp-links" }, [
+            el("a", { class: "btn btn-sm", href: e.url + "/", target: "_blank", rel: "noopener" }, [icon("link", 13), " Visit"]),
+            e.setup_url ? el("a", { class: "btn btn-sm btn-primary", href: e.setup_url, target: "_blank", rel: "noopener" }, [icon("wand", 13), " Finish setup"]) : null,
+            !e.setup_url && e.admin_url ? el("a", { class: "btn btn-sm btn-primary", href: e.admin_url, target: "_blank", rel: "noopener" }, [icon("lock", 13), " Open admin"]) : null]),
+          rows.length ? el("div", { class: "ax-creds" }, [el("span", { class: "dm-hint", text: "The setup page asks for these — copy them now (the password isn't shown again):" }),
+            ...rows.map(([k, v]) => el("div", {}, [el("span", { text: k }), el("code", { text: v }), copy(v)]))]) : null,
+          ...(e.notes || []).map((n) => el("p", { class: "dm-hint", text: "• " + n })),
+          /\.(test|local|localhost)(\/|:|$)/.test(e.url) ? el("p", { class: "dm-hint", text: "Local domain: add it to your computer's hosts file (Domains → 🔍 shows the exact line)." }) : null,
+        ]));
+      }
+    }
+    function drawFoot() {
+      foot.innerHTML = "";
+      const back = step > 0 && !(job && job.status !== "failed") ? el("button", { class: "btn", text: "← Back", onclick: () => { step--; render(); } }) : el("span");
+      let next;
+      if (step < 2) {
+        const p = opts();
+        let ok = step === 0 ? pvOk : true, why = "";
+        if (step === 1 && a.kind === "cli" && a.admin !== false && (!a.optional_setup || w.setup)) {
+          if (!a.fixed_user && !(p.admin_user || "").trim()) { ok = false; why = "Enter an admin username"; }
+          else if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(p.admin_email || "")) { ok = false; why = "Enter the admin email"; }
+          else if ((p.admin_pass || "").length < 12) { ok = false; why = "Password: 12+ characters"; }
+        }
+        next = el("button", { class: "btn btn-primary", disabled: ok ? null : "", title: why, text: why || "Next →", onclick: () => { step++; render(); } });
+      } else if (!(job && job.status === "done")) {
+        next = el("button", { class: "btn btn-primary ax-go", style: `--c:${a.color}`, onclick: (e) => content._go(e.currentTarget) }, [el("span", { class: "ax-gear" }, icon("gear", 16)), el("span", { text: `Install ${a.name}` })]);
+      } else next = el("button", { class: "btn btn-primary", text: "Done", onclick: close });
+      foot.append(back, el("span", { class: "grow" }), next);
+    }
+    function render() { drawSteps(); content.innerHTML = ""; [stepWhere, stepDetails, stepInstall][step](); drawFoot(); }
+    (async () => { try { st = await appStatus(); } catch (e) {} render(); })();
   }
 
   // ---- go ----

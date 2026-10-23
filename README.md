@@ -7,7 +7,7 @@ databases, fail2ban, FTP, backups, Git and more — all from your browser.
 Built with **FastAPI** (Python) + a dependency-free **vanilla JS** frontend, so
 there's nothing to compile on the Pi.
 
-**Version: Beta v1.0.14** (`1.0.14-beta`) — a free, open-source hobby project (MIT License). Website: https://aurora51.com
+**Version: Beta v1.0.15** (`1.0.15-beta`) — a free, open-source hobby project (MIT License). Website: https://aurora51.com
 
 To update, open **Preferences → About & Updates → Check for updates** in the panel (it only contacts
 aurora51.com when you click), or re-download the zip, unzip it over your install and re-run `sudo bash install.sh`.
@@ -27,7 +27,8 @@ or the [Raspberry Pi Forums thread](https://forums.raspberrypi.com/viewtopic.php
 | **Security** | fail2ban jails (SSH, panel, OpenVPN, FTP, Apache, Nginx, MariaDB, port scans, repeat offenders), SSH keys, SSL/TLS, ModSecurity, hotlink protection, API tokens, TOTP two-factor login, panel HTTPS. |
 | **Files** | File manager (upload, edit, zip, recycle bin), Images (thumbnails, resize, WebP), Directory Privacy (password-protected folders), Disk & Inodes usage, Web Disk (WebDAV), FTP accounts (locked to a folder; full / read-only / upload-only), Backups (folders, single databases, upload & import `.sql` dumps, categories, live progress bars, several restores at once) + Backup Wizard (files and databases, selective restore), Git Version Control (clone, pull, deploy, deploy keys). |
 | **Advanced** | Browser terminal, cron wizard, `.htaccess` tools, ClamAV virus scanner, DNS tracing. |
-| **Software** | One-click Apache / Nginx / Lighttpd / Caddy / PHP-FPM / MariaDB / vsftpd, each with a settings page, config editor (validated, auto-rollback) and logs; PHP settings and extensions; App Manager; WordPress installer. |
+| **Software** | One-click Apache / Nginx / Lighttpd / Caddy / PHP-FPM / MariaDB / vsftpd, each with a settings page, config editor (validated, auto-rollback) and logs; PHP settings and extensions; App Manager. |
+| **App Installer** | Softaculous-style catalog of 40+ web apps in 18 categories (WordPress, Joomla, Drupal, phpBB, MediaWiki, Nextcloud, Moodle, OpenCart, Roundcube, Matomo, Laravel, Symfony…). Pick an app, choose Local / IP / domain / subdomain / existing site / any folder, and it downloads the latest release (checksum-verified where published), creates the database and — for apps with a command-line installer — sets up the admin account too, with a live progress bar. |
 
 Auth is a single admin account (PBKDF2-hashed password, signed 8-hour session
 cookies), with optional TOTP 2FA. First launch walks you through creating the
