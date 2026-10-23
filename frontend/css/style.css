@@ -1111,6 +1111,7 @@ pre.log { background: rgba(0,0,0,0.35); border: 1px solid var(--stroke); border-
 .about-rel-new h4 { color: var(--accent); }
 
 /* Folder sites (Domains) */
+.dm-btnrow { display: flex; gap: 8px; flex-wrap: wrap; }
 .dm-conf-ed { width: 100%; min-height: 50vh; font-size: 12.5px; line-height: 1.5; white-space: pre; tab-size: 4; resize: vertical; }
 .dm-prefix { display: flex; align-items: stretch; }
 .dm-prefix span { text-transform: none; letter-spacing: 0; font-weight: 500; display: flex; align-items: center; padding: 0 10px; border: 1px solid var(--stroke); border-right: none; border-radius: 12px 0 0 12px; color: var(--text-dim); font-size: 13px; white-space: nowrap; background: rgba(0,0,0,0.2); }

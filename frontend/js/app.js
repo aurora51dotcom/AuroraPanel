@@ -4319,10 +4319,20 @@
       const sslDetail = el("div", { class: "dm-ssl-detail" });
       const shownCert = viaHttps ? viaHttps.cert_info : d.cert;
       const certRow = shownCert ? el("div", { class: "dm-cert" }, [icon("lock", 14), el("span", { html: `<b>${esc(shownCert.subject || "")}</b> · issued by ${esc(shownCert.issuer || "?")} · expires <b>${esc(shownCert.expires || "?")}</b>` })]) : null;
+      const le = {};  // the Let's Encrypt controls, so Save can start issuing too
+      // Self-signed certificates can be made again (new key and dates, current names).
+      const savedSsl = viaHttps ? viaHttps.ssl : d.settings.ssl;
+      const regenBtn = () => el("button", { class: "btn btn-sm", type: "button", title: "Make a new self-signed certificate: new key, new dates, current names", onclick: async (e) => {
+        if (!confirmInline("Make a new self-signed certificate? Browsers that trusted the old one will warn once more.")) return;
+        e.currentTarget.disabled = true;
+        try { await API.siteRegenCert(d.system ? d.conf : d.settings.server_name); toast("New certificate made & Apache reloaded", "good"); load(); }
+        catch (err) { openModal("Couldn't make a new certificate", el("pre", { class: "log", text: err.message }), []); }
+      } }, [icon("refresh", 13), " Regenerate certificate"]);
       const drawSsl = () => {
         sslDetail.innerHTML = "";
         if (s.ssl === "none") sslDetail.append(el("p", { class: "dm-hint", text: "Visitors can only reach the site over plain http://. Pick a certificate to enable HTTPS." }));
-        if (s.ssl === "selfsigned") sslDetail.append(el("p", { class: "dm-hint", text: "A certificate is generated on this Pi (covers the domain + aliases). Encrypts traffic, but browsers show a warning — fine for LAN/.test sites." }));
+        if (s.ssl === "selfsigned") sslDetail.append(el("p", { class: "dm-hint", text: "A certificate is generated on this Pi (covers the domain + aliases). Encrypts traffic, but browsers show a warning — fine for LAN/.test sites." }),
+          !sysSsl && savedSsl === "selfsigned" ? el("div", {}, regenBtn()) : null);
         if (sysSsl) { sslDetail.innerHTML = ""; sslDetail.append(el("p", { class: "dm-hint", text: (viaHttps ? `https:// for this address is served by Apache's built-in https site (${sslConf}); this changes its certificate. ` : "") +
           (s.ssl === "none" ? `None turns ${sslConf} (https on port 443) off. http:// keeps working.` : s.ssl === "selfsigned" ? "A certificate is generated on this Pi for its address. Browsers show a warning — fine on a LAN." : "Point to your own certificate and key files.") })); }
         if (s.ssl === "custom") sslDetail.append(field("Certificate file (.crt / fullchain.pem)", text("cert", "/etc/ssl/certs/site.crt", sysSsl)), field("Private key", text("key", "/etc/ssl/private/site.key", sysSsl)), field("Chain (optional)", text("chain", "", sysSsl)));
@@ -4337,24 +4347,28 @@
             }
             catch (e) { openModal("Couldn't change the certificate", el("pre", { class: "log", text: e.message }), []); apply.disabled = false; }
           } }, [icon("lock", 13), " Apply certificate"]);
-          sslDetail.append(el("div", {}, apply));
+          sslDetail.append(el("div", { class: "dm-btnrow" }, [apply, s.ssl === "selfsigned" && savedSsl === "selfsigned" ? regenBtn() : null]));
           return;
         }
         if (s.ssl === "letsencrypt") {
           const email = el("input", { type: "email", placeholder: "you@example.com", value: (() => { try { return localStorage.getItem("aurora-le-email") || ""; } catch (e) { return ""; } })() });
           const withAliases = el("input", { type: "checkbox" }); withAliases.checked = true;
+          const force = el("input", { type: "checkbox" });
           const log = el("pre", { class: "log", hidden: true });
           const issue = el("button", { class: "btn btn-primary btn-sm", type: "button", onclick: async () => {
             if (!d.certbot) {
               try { const r = await API.certbotInstall(); follow(r.job, "Installing certbot…", () => load()); } catch (e) { toast(e.message, "bad"); }
               return;
             }
-            // Picking "Let's Encrypt" (and its Force HTTPS / HSTS switches) is what this button saves
-            // once the certificate exists, so only other unsaved edits have to be saved first.
-            const others = JSON.stringify({ ...s, ssl: d.settings.ssl, force_https: d.settings.force_https, hsts: d.settings.hsts });
-            if (others !== orig) return toast("Save your other changes first", "bad");
+            if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.value.trim())) { email.focus(); return toast("Enter an email for Let's Encrypt expiry notices", "bad"); }
+            // Picking "Let's Encrypt" (and its Force HTTPS / HSTS switches) is saved once the certificate
+            // exists; any other unsaved edits are saved first, keeping the current certificate for now.
+            const others = { ...s, ssl: d.settings.ssl, force_https: d.settings.force_https, hsts: d.settings.hsts };
+            if (JSON.stringify(others) !== orig) {
+              try { await API.siteSave(name, others); name = s.server_name; } catch (e) { return openModal("Couldn't save", el("pre", { class: "log", text: e.message }), []); }
+            }
             try { localStorage.setItem("aurora-le-email", email.value.trim()); } catch (e) {}
-            try { const r = await API.siteLE(d.settings.server_name, email.value.trim(), withAliases.checked); follow(r.job, "Requesting certificate…", async (ok) => {
+            try { const r = await API.siteLE(s.server_name, email.value.trim(), withAliases.checked, force.checked); follow(r.job, "Requesting certificate…", async (ok) => {
               if (!ok) return;
               try {
                 const cur = (await API.siteGet(name)).settings;
@@ -4379,8 +4393,10 @@
             el("p", { class: "dm-hint", html: d.le_available ? "✅ A Let's Encrypt certificate exists for this domain — save to use it. It renews automatically via certbot's timer." : "Free, trusted certificate. The domain must already point at this Pi's <b>public IP</b> and port <b>80</b> must be forwarded to it, so Let's Encrypt can verify it." }),
             field("Email for expiry notices", email),
             el("label", { class: "dm-check" }, [withAliases, " Include aliases (", s.aliases.filter((a) => !a.startsWith("*")).join(", ") || "none", ")"]),
+            d.le_available ? el("label", { class: "dm-check" }, [force, " Renew now, even if it isn't due yet ", el("span", { class: "muted", text: "(Let's Encrypt allows only a few of these per week)" })]) : null,
             el("p", { class: "dm-hint", html: "By issuing you agree to the <a href='https://letsencrypt.org/repository/' target='_blank' rel='noopener'>Let's Encrypt Subscriber Agreement</a>." }),
             el("div", {}, issue), log);
+          Object.assign(le, { issue });
         }
       };
       drawSsl();
@@ -4472,6 +4488,8 @@
 
       // ---- save bar ----
       const saveBtn = el("button", { class: "btn btn-primary", onclick: async () => {
+        // Let's Encrypt picked but not issued yet: Save does what "Issue / renew certificate" does.
+        if (s.ssl === "letsencrypt" && !d.le_available && le.issue) { le.issue.scrollIntoView({ block: "center" }); return le.issue.click(); }
         saveBtn.disabled = true;
         try {
           const r = await API.siteSave(name, s);

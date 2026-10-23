@@ -1459,6 +1459,7 @@ class LEBody(BaseModel):
     server_name: str
     email: str
     include_aliases: bool = True
+    force: bool = False
 
 
 def _site_call(fn, *a):
@@ -1568,7 +1569,16 @@ def api_certbot_install(user: str = auth.CurrentUser):
 
 @app.post("/api/sites/letsencrypt")
 def api_site_le(body: LEBody, user: str = auth.CurrentUser):
-    return {"job": _site_call(sites.issue_letsencrypt, body.server_name, body.email, body.include_aliases).id}
+    return {"job": _site_call(sites.issue_letsencrypt, body.server_name, body.email, body.include_aliases, body.force).id}
+
+
+class RegenBody(BaseModel):
+    name: str
+
+
+@app.post("/api/sites/selfsigned/regenerate")
+def api_site_regen(body: RegenBody, user: str = auth.CurrentUser):
+    return _site_call(sites.regenerate_selfsigned, body.name)
 
 
 # ---- Zone Editor (structured) ----

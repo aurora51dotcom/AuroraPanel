@@ -400,9 +400,9 @@ def render(s: dict) -> str:
 # --------------------------------------------------------------------------- #
 # Writing
 # --------------------------------------------------------------------------- #
-def _ensure_selfsigned(s: dict) -> None:
+def _ensure_selfsigned(s: dict, force: bool = False) -> None:
     crt, key, _ = _ssl_paths(s)
-    if Path(crt).exists() and Path(key).exists():
+    if Path(crt).exists() and Path(key).exists() and not force:
         return
     SSL_DIR.mkdir(parents=True, exist_ok=True)
     san = ",".join(f"{'IP' if _is_ip(n) else 'DNS'}:{n}" for n in [s["server_name"], *s["aliases"]])
@@ -411,6 +411,39 @@ def _ensure_selfsigned(s: dict) -> None:
     if r.returncode != 0:
         raise SiteError(r.stderr.strip() or "openssl failed")
     Path(key).chmod(0o600)
+
+
+def regenerate_selfsigned(name: str) -> dict:
+    """Make a fresh self-signed certificate (new key, new dates, current names) for a site that uses one.
+    The old files are put back if Apache rejects the new ones."""
+    _require()
+    conf = _conf_for(name)
+    if not conf:
+        raise SiteError("No site found with that name")
+    if conf.name in SYSTEM_CONFS:
+        if _has_http(conf):
+            conf = AVAIL / "default-ssl.conf"
+        s = _settings_from_conf(_live_conf(conf))
+        if s["server_name"] and not (_is_ip(s["server_name"]) or _HOST.match(s["server_name"])):
+            s["server_name"] = _local_ip()
+    else:
+        s = _settings_from_conf(conf)
+    s = {**s, "ssl": "selfsigned", "aliases": [a for a in s["aliases"] if _is_ip(a) or _HOST.match(a)]}
+    crt, key, _ = _ssl_paths(s)
+    if conf.name not in SYSTEM_CONFS and _settings_from_conf(conf)["ssl"] != "selfsigned":
+        raise SiteError("This site doesn't use a self-signed certificate")
+    if conf.name in SYSTEM_CONFS and (_settings_from_conf(_live_conf(conf))["cert"] or "") != crt:
+        raise SiteError("Pick Self-signed and click Apply certificate first — this site uses other certificate files")
+    old = {p: Path(p).read_bytes() for p in (crt, key) if Path(p).exists()}
+    _ensure_selfsigned(s, force=True)
+    test = _run(["apache2ctl", "configtest"])
+    if test.returncode != 0:
+        for pth, data in old.items():
+            Path(pth).write_bytes(data)
+        raise SiteError("Apache rejected the new certificate, the old one was kept:\n" + (test.stderr + test.stdout)[:1500])
+    if _run(["systemctl", "reload", "apache2"]).returncode != 0:
+        _run(["systemctl", "restart", "apache2"])
+    return {"ok": True, "cert": crt}
 
 
 def _needed_mods(s: dict) -> list[str]:
@@ -780,7 +813,7 @@ def certbot_install() -> jobs.Job:
     return jobs.launch("install certbot", ["apt-get", "-y", "install", "certbot"], env=env)
 
 
-def issue_letsencrypt(name: str, email: str, include_aliases: bool = True) -> jobs.Job:
+def issue_letsencrypt(name: str, email: str, include_aliases: bool = True, force: bool = False) -> jobs.Job:
     _require()
     if not shutil.which("certbot"):
         raise SiteError("certbot is not installed")
@@ -791,7 +824,7 @@ def issue_letsencrypt(name: str, email: str, include_aliases: bool = True) -> jo
         raise SiteError("Let's Encrypt can't issue certificates for an IP address")
     names = [s["server_name"]] + ([a for a in s["aliases"] if not a.startswith("*") and not _is_ip(a)] if include_aliases else [])
     argv = ["certbot", "certonly", "--webroot", "-w", s["docroot"], "--non-interactive", "--agree-tos",
-            "-m", email, "--keep-until-expiring", "--cert-name", s["server_name"]]
+            "-m", email, "--force-renewal" if force else "--keep-until-expiring", "--cert-name", s["server_name"]]
     for n in names:
         argv += ["-d", n]
     return jobs.launch(f"Let's Encrypt: {s['server_name']}", argv)
