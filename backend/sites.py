@@ -33,6 +33,8 @@ LE_LIVE = Path("/etc/letsencrypt/live")
 DEFAULT_DOCROOT_BASE = Path("/var/www")
 SYSTEM_CONFS = {"000-default.conf", "default-ssl.conf"}
 MARK = "# aurora-settings:"
+_CX_BEGIN, _CX_END = "# aurora-custom begin", "# aurora-custom end"
+_CX_BLOCK = re.compile(rf"\n[ \t]*{re.escape(_CX_BEGIN)}.*?{re.escape(_CX_END)}[ \t]*", re.S)
 _HOST = re.compile(r"^(?=.{1,253}$)(\*\.)?([A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$")
 
 DEFAULTS = {
@@ -116,6 +118,10 @@ def _settings_from_conf(path: Path) -> dict:
     elif main["redirect"] and not main["redirect"].group(2).startswith("https://%{"):
         code = main["redirect"].group(1) or "302"
         s.update(redirect_url=main["redirect"].group(2), redirect_code=301 if code in ("301", "permanent") else 302)
+    m = _CX_BLOCK.search(text)
+    if m:  # built-in sites keep panel-added directives in a marked block
+        s["custom"] = "\n".join(l[4:] if l.startswith("    ") else l.strip()
+                                for l in m.group(0).strip().splitlines()[1:-1])
     s["_managed"] = False
     return s
 
@@ -646,6 +652,46 @@ def _local_ip() -> str:
             return so.getsockname()[0]
     except OSError:
         return "127.0.0.1"
+
+
+def set_system_custom(conf_name: str, custom: str) -> dict:
+    """Extra directives for a built-in site, kept in a marked block at the end of its main
+    VirtualHost (:80 for 000-default, :443 for default-ssl); the rest of the file is untouched."""
+    _require()
+    conf = AVAIL / conf_name
+    if conf_name not in SYSTEM_CONFS or not conf.is_file():
+        raise SiteError("Only Apache's built-in sites are changed here — use Manage → Save for other sites")
+    custom = (custom or "").strip()[:8000]
+    if re.search(r"(?i)</?\s*VirtualHost", custom):
+        raise SiteError("Custom directives can't open or close a VirtualHost")
+    if _CX_BEGIN in custom or _CX_END in custom:
+        raise SiteError("Custom directives can't contain the panel's markers")
+    live = _live_conf(conf)
+    text = live.read_text(errors="replace")
+    bare = _CX_BLOCK.sub("", text)
+    if custom:
+        port = "80" if _has_http(conf) else "443"
+        vh = re.search(rf"(?m)^[ \t]*<VirtualHost\s+[^>]*:{port}\s*>.*?(?=\n[ \t]*</VirtualHost>)", bare, re.S | re.I)
+        if not vh:
+            raise SiteError(f"{conf.name} has no port {port} VirtualHost to add directives to")
+        block = ["", f"    {_CX_BEGIN}"] + ["    " + ln for ln in custom.splitlines()] + [f"    {_CX_END}"]
+        new = bare[:vh.end()] + "\n".join(block) + bare[vh.end():]
+    else:
+        new = bare
+    if new == text:
+        return {"ok": True}
+    SITE_BAK.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(live, SITE_BAK / f"{conf.name}.{int(time.time())}")
+    live.write_text(new, encoding="utf-8")
+    test = _run(["apache2ctl", "configtest"])
+    if test.returncode != 0:
+        live.write_text(text, encoding="utf-8")
+        err = "\n".join(l for l in (test.stderr + test.stdout).splitlines() if "AH00558" not in l).strip()
+        raise SiteError("Apache rejected the directives, nothing was changed:\n" + err[:1500])
+    r = _run(["systemctl", "reload", "apache2"])
+    if r.returncode != 0:
+        _run(["systemctl", "restart", "apache2"])
+    return {"ok": True}
 
 
 def remove_site(name: str) -> dict:

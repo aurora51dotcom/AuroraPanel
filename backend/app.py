@@ -1506,6 +1506,16 @@ def api_site_system_ssl(body: SystemSslBody, user: str = auth.CurrentUser):
     return _site_call(sites.set_system_ssl, body.conf, body.ssl, body.cert, body.key, body.chain)
 
 
+class SystemCustomBody(BaseModel):
+    conf: str
+    custom: str = ""
+
+
+@app.post("/api/sites/system-custom")
+def api_site_system_custom(body: SystemCustomBody, user: str = auth.CurrentUser):
+    return _site_call(sites.set_system_custom, body.conf, body.custom)
+
+
 @app.post("/api/sites/remove")
 def api_site_remove(body: DomainNameBody, user: str = auth.CurrentUser):
     return _site_call(sites.remove_site, body.server_name)
