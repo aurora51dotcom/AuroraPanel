@@ -2522,56 +2522,418 @@
   //  Backups
   // ======================================================================
   function viewBackups(root) {
-    const form = el("div", { class: "card", style: "margin-bottom:16px" }, [
-      el("h3", { text: "Create backup" }),
-      el("div", { class: "toolbar" }, [
-        el("input", { id: "bk-src", type: "text", placeholder: `${sysHome()}  (absolute path to archive)`, style: "flex:1;min-width:240px" }),
-        el("input", { id: "bk-label", type: "text", placeholder: "label (optional)", style: "max-width:180px" }),
-        el("button", { class: "btn btn-sm btn-primary", text: "Create", onclick: createBackup }),
-      ]),
-    ]);
-    const body = el("div", { id: "bk-body" }, el("div", { class: "loading", text: "Loading…" }));
-    root.append(form, body);
-    const jp = jobPanel(root);
+    const CATS = [["all", "All"], ["files", "Folders"], ["databases", "Databases"], ["full", "Full"]];
+    const ENG = { mysql: "MariaDB", pgsql: "PostgreSQL" };
+    const inCat = (b, c) => c === "all" ? true
+      : c === "full" ? b.category === "full"
+      : c === "databases" ? b.kind === "sql" || (b.kind === "wizard" && ((b.mysql || []).length + (b.pgsql || []).length) > 0)
+      : b.kind === "plain" || b.kind === "unknown" || (b.kind === "wizard" && (b.paths || []).length > 0);
+    let cat = CATS.some(([k]) => k === state.viewArg) ? state.viewArg : "all";
+    let data = null, query = "";
+    const items = new Map();          // archive name -> { node, jobHost, restoreBtn, panel }
+    const jobNodes = new Map();       // job id -> node
+    const seenRunning = new Set();    // jobs we watched run, so we toast when they end
+    const openPanels = new Set();
+    let dismissed;
+    try { dismissed = new Set(JSON.parse(sessionStorage.getItem("aurora-bk-dismissed") || "[]")); } catch (e) { dismissed = new Set(); }
+    const dismiss = (id) => { dismissed.add(id); try { sessionStorage.setItem("aurora-bk-dismissed", JSON.stringify([...dismissed])); } catch (e) {} };
 
-    const load = async () => {
-      await guardedLoad(async () => {
-        const data = await API.backups();
-        body.innerHTML = "";
-        body.append(el("p", { class: "muted", style: "margin:0 0 10px", text: `Stored in ${data.dir}` }));
-        if (!data.backups.length) { body.append(el("p", { class: "empty", text: "No backups yet." })); return; }
-        const rows = data.backups.map((b) => el("tr", {}, [
-          el("td", { text: b.name }), el("td", { text: fmtBytes(b.size) }),
-          el("td", { class: "muted", text: new Date(b.modified * 1000).toLocaleString() }),
-          el("td", { class: "actions" }, [
-            el("a", { class: "btn btn-sm btn-ghost", href: API.backupDownloadUrl(b.name), text: "↓" }),
-            el("button", { class: "btn btn-sm", text: "Restore", onclick: () => restoreBackup(b.name) }),
-            el("button", { class: "btn btn-sm btn-danger", text: "✕", onclick: async () => {
-              if (!confirmInline(`Delete backup ${b.name}?`)) return;
-              try { await API.backupDelete(b.name); toast("Deleted", "good"); load(); } catch (e) { toast(e.message, "bad"); } } }),
-          ]),
-        ]));
-        body.append(el("div", { class: "table-wrap" }, el("table", {}, [
-          el("thead", {}, el("tr", {}, ["Backup", "Size", "Created", ""].map((h) => el("th", { text: h })))),
-          el("tbody", {}, rows),
-        ])));
-      });
+    // ---- "Click again to confirm" buttons instead of browser dialogs ----
+    function armed(label, armedLabel, action, cls) {
+      let t = null;
+      const b = btn(label, async () => {
+        if (!b.classList.contains("armed")) {
+          b.classList.add("armed"); b.textContent = armedLabel;
+          t = setTimeout(() => { b.classList.remove("armed"); b.textContent = label; }, 4000);
+          return;
+        }
+        clearTimeout(t); b.classList.remove("armed"); b.textContent = label;
+        await action(b);
+      }, cls);
+      return b;
+    }
+    const when = (ts) => {
+      const s = Date.now() / 1000 - ts;
+      if (s < 60) return "just now";
+      if (s < 3600) return `${Math.round(s / 60)} min ago`;
+      if (s < 86400) return `${Math.round(s / 3600)} h ago`;
+      if (s < 86400 * 30) return `${Math.round(s / 86400)} days ago`;
+      return new Date(ts * 1000).toLocaleDateString();
     };
-    async function createBackup() {
-      const source = $("#bk-src").value.trim(), label = $("#bk-label").value.trim();
-      if (!source) { toast("Source path required", "bad"); return; }
-      try { const r = await API.backupCreate(source, label); jp.run(r.job, "Creating backup"); setTimeout(load, 1500); }
-      catch (err) { toast(err.message, "bad"); }
+    const dur = (s) => s < 60 ? `${Math.max(1, Math.round(s))}s` : s < 3600 ? `${Math.floor(s / 60)}m ${Math.round(s % 60)}s` : `${Math.floor(s / 3600)}h ${Math.round((s % 3600) / 60)}m`;
+
+    // ---------------- Create / import card ----------------
+    const createBody = el("div", { class: "bk-create-body" });
+    let mode = "folder";
+    const seg = el("div", { class: "cw-seg cw-seg-sm" }, [["folder", "Folder"], ["database", "Database"], ["upload", "Upload / import"]].map(([k, l]) =>
+      el("button", { type: "button", class: k === mode ? "active" : "", text: l, onclick: (e) => {
+        mode = k; seg.querySelectorAll("button").forEach((x) => x.classList.toggle("active", x === e.target)); drawCreate(); } })));
+    const createCard = el("div", { class: "card bk-create" }, [
+      el("div", { class: "bk-create-head" }, [el("h3", { text: "New backup" }), seg]), createBody]);
+
+    function drawCreate() {
+      createBody.innerHTML = "";
+      if (mode === "folder") {
+        const src = el("input", { type: "text", placeholder: `${(data && data.home) || sysHome()}  (folder to back up)` });
+        const label = el("input", { type: "text", placeholder: "name (optional)", maxlength: 60 });
+        const quick = el("div", { class: "bk-quick" }, [data && data.home, "/var/www", "/etc"].filter(Boolean).map((p) =>
+          el("button", { type: "button", class: "bk-chip", text: p, onclick: () => { src.value = p; src.focus(); } })));
+        const go = btn("Back up folder", async () => {
+          const s = src.value.trim();
+          if (!s) { toast("Type the folder to back up", "bad"); src.focus(); return; }
+          go.disabled = true;
+          try { await API.backupCreate(s, label.value.trim()); toast("Backup started", "good"); src.value = ""; label.value = ""; poll(true); }
+          catch (e) { toast(e.message, "bad"); }
+          go.disabled = false;
+        }, "btn-primary");
+        src.addEventListener("keydown", (e) => { if (e.key === "Enter") go.click(); });
+        createBody.append(el("div", { class: "bk-row" }, [src, label, go]), quick,
+          el("p", { class: "dm-hint", text: "Packs the folder into a .tar.gz. Restoring puts it back in the same place (or anywhere you pick)." }));
+      } else if (mode === "database") {
+        const dbs = (data && data.databases) || { mysql: [], pgsql: [] };
+        if (!dbs.mysql.length && !dbs.pgsql.length) {
+          createBody.append(el("p", { class: "muted", text: dbs.mysql_ok || dbs.pgsql_ok ? "No databases yet." : "No database server is running (install MariaDB or PostgreSQL in System Applications)." }));
+          return;
+        }
+        const sel = el("select", {}, ["mysql", "pgsql"].filter((e) => dbs[e].length).map((e) =>
+          el("optgroup", { label: ENG[e] }, dbs[e].map((d) => el("option", { value: `${e}:${d}`, text: d })))));
+        const label = el("input", { type: "text", placeholder: "name (optional)", maxlength: 40 });
+        const go = btn("Back up database", async () => {
+          const [engine, db] = sel.value.split(/:(.*)/);
+          go.disabled = true;
+          try { await API.backupDatabase(engine, db, label.value.trim()); toast(`Backing up ${db}`, "good"); label.value = ""; poll(true); }
+          catch (e) { toast(e.message, "bad"); }
+          go.disabled = false;
+        }, "btn-primary");
+        createBody.append(el("div", { class: "bk-row" }, [sel, label, go]),
+          el("p", { class: "dm-hint", text: "Saves one database as a compressed .sql.gz dump. Restore it into the same database, or import it into a new one (handy for a test copy)." }));
+      } else {
+        const input = el("input", { type: "file", accept: ".sql,.gz,.tgz", class: "bk-file" });
+        const bar = el("div", { class: "bk-bar", hidden: true }, el("span"));
+        const status = el("div", { class: "bk-job-line muted" });
+        const zone = el("label", { class: "bk-drop" }, [input, icon("backup", 22),
+          el("b", { text: "Drop a .sql, .sql.gz or .tar.gz file here" }), el("span", { class: "muted", text: "or click to pick one — it lands in the backups folder, then you choose where it goes" })]);
+        const send = (file) => {
+          if (!file) return;
+          bar.hidden = false; zone.classList.add("busy");
+          const t0 = Date.now();
+          API.backupUpload(file, (sent, total) => {
+            const pct = total ? (sent / total) * 100 : 0;
+            bar.firstChild.style.width = `${pct}%`;
+            const rate = sent / Math.max(0.5, (Date.now() - t0) / 1000);
+            status.textContent = `Uploading ${file.name} · ${fmtBytes(sent)} of ${fmtBytes(total)} · ${pct.toFixed(0)}% · ${fmtBytes(rate)}/s`;
+          }).then(async (r) => {
+            toast(`Uploaded ${r.name}`, "good");
+            status.textContent = ""; bar.hidden = true; zone.classList.remove("busy"); input.value = "";
+            openPanels.add(r.name);
+            if (cat !== "all" && !inCat(r, cat)) setCat("all");
+            await load();
+            const it = items.get(r.name);
+            if (it) it.node.scrollIntoView({ behavior: "smooth", block: "center" });
+          }).catch((e) => { toast(e.message, "bad"); status.textContent = e.message; bar.hidden = true; zone.classList.remove("busy"); });
+        };
+        input.addEventListener("change", () => send(input.files[0]));
+        zone.addEventListener("dragover", (e) => { e.preventDefault(); zone.classList.add("over"); });
+        zone.addEventListener("dragleave", () => zone.classList.remove("over"));
+        zone.addEventListener("drop", (e) => { e.preventDefault(); zone.classList.remove("over"); send(e.dataTransfer.files[0]); });
+        createBody.append(zone, bar, status);
+      }
     }
-    async function restoreBackup(name) {
-      const dest = promptInline("Restore to which directory? (archive recreates its original folder inside this)", "/");
-      if (dest === null) return;
-      if (!confirmInline(`Restore ${name} into ${dest}? Existing files may be overwritten.`)) return;
-      try { const r = await API.backupRestore(name, dest || "/"); jp.run(r.job, "Restoring backup"); }
-      catch (err) { toast(err.message, "bad"); }
+
+    // ---------------- List ----------------
+    const chips = el("div", { class: "bk-cats" });
+    const search = el("input", { type: "search", class: "bk-search", placeholder: "Filter by name…" });
+    search.addEventListener("input", () => { query = search.value.trim().toLowerCase(); drawList(); });
+    const pending = el("div", { class: "bk-list bk-pending" });
+    const list = el("div", { class: "bk-list" });
+    const where = el("p", { class: "muted bk-where" });
+    root.append(createCard, el("div", { class: "bk-toolbar" }, [chips, search]), pending, list, where);
+
+    function setCat(c) {
+      cat = c;
+      try { history.replaceState(null, "", `#/backups${c === "all" ? "" : "/" + c}`); } catch (e) {}
+      state.viewArg = c === "all" ? null : c;
+      drawList();
     }
+    function drawChips() {
+      chips.innerHTML = "";
+      for (const [k, l] of CATS) {
+        const n = data.backups.filter((b) => inCat(b, k)).length;
+        chips.append(el("button", { type: "button", class: `bk-cat${k === cat ? " active" : ""}`, onclick: () => setCat(k) },
+          [l, el("span", { class: "bk-count", text: String(n) })]));
+      }
+    }
+
+    function describe(b) {
+      if (b.kind === "sql") return [pill(ENG[b.engine] || "SQL dump", "db"), el("span", { text: b.db ? `database ${b.db}` : "" })];
+      if (b.kind === "wizard") {
+        const bits = [];
+        if ((b.paths || []).length) bits.push(`${b.paths.length} folder${b.paths.length > 1 ? "s" : ""}`);
+        if ((b.mysql || []).length) bits.push(`${b.mysql.length} MariaDB`);
+        if ((b.pgsql || []).length) bits.push(`${b.pgsql.length} PostgreSQL`);
+        return [pill(b.category === "full" ? "Full" : b.category === "databases" ? "Databases" : b.category === "mixed" ? "Files + DB" : "Folders", b.category === "full" ? "full" : b.category === "databases" ? "db" : "files"),
+          el("span", { text: `Wizard · ${bits.join(" · ")}` })];
+      }
+      if (b.kind === "unknown") return [pill("unreadable", "bad"), el("span", { text: b.error || "" })];
+      const from = b.parent ? `${b.parent.replace(/\/$/, "")}/${b.top}` : b.top;
+      return [pill("Folder", "files"), el("span", { class: "net-mono", text: from || "" }), b.guessed && b.parent ? el("span", { class: "muted", text: "(guessed)" }) : null];
+    }
+
+    function itemIcon(b) {
+      const k = b.kind === "sql" ? "db" : b.category === "full" ? "full" : b.category === "databases" ? "db" : "files";
+      return el("div", { class: `bk-ico ${k}` }, icon(k === "db" ? "database" : k === "full" ? "backup" : "folder", 18));
+    }
+
+    function buildItem(b) {
+      const jobHost = el("div", { class: "bk-jobs" });
+      const panel = el("div", { class: "bk-panel", hidden: true });
+      const restoreBtn = btn(b.kind === "sql" ? "Restore / import" : "Restore", () => togglePanel(b, panel, restoreBtn), "bk-restore");
+      if (b.kind === "unknown") restoreBtn.disabled = true;
+      const node = el("div", { class: "bk-item" }, [
+        el("div", { class: "bk-main" }, [
+          itemIcon(b),
+          el("div", { class: "bk-name" }, [el("div", { class: "bk-title", title: b.name, text: b.name }), el("div", { class: "bk-meta" }, describe(b))]),
+          el("div", { class: "bk-size", text: fmtBytes(b.size) }),
+          el("div", { class: "bk-date muted", title: new Date(b.modified * 1000).toLocaleString(), text: when(b.modified) }),
+          el("div", { class: "bk-actions" }, [
+            el("a", { class: "btn btn-sm btn-ghost", href: API.backupDownloadUrl(b.name), title: "Download", "aria-label": `Download ${b.name}` }, "↓"),
+            restoreBtn,
+            armed("✕", "Delete?", async () => {
+              try { await API.backupDelete(b.name); toast("Deleted", "good"); load(); } catch (e) { toast(e.message, "bad"); }
+            }, "btn-danger"),
+          ]),
+        ]),
+        panel, jobHost,
+      ]);
+      const it = { node, jobHost, restoreBtn, panel, b };
+      if (openPanels.has(b.name)) togglePanel(b, panel, restoreBtn, true);
+      return it;
+    }
+
+    function togglePanel(b, panel, rb, forceOpen) {
+      if (!panel.hidden && !forceOpen) { panel.hidden = true; panel.innerHTML = ""; openPanels.delete(b.name); rb.classList.remove("active"); return; }
+      openPanels.add(b.name); rb.classList.add("active");
+      panel.innerHTML = ""; panel.hidden = false;
+      const close = () => togglePanel(b, panel, rb);
+      const put = (...nodes) => panel.append(...nodes.filter(Boolean)); // append() would print a null as "null"
+      const started = (r, what) => { toast(what, "good"); close(); poll(true); return r; };
+      if (b.kind === "plain") {
+        const dest = el("input", { type: "text", value: b.parent || (data && data.home) || "/" });
+        const note = el("p", { class: "dm-hint" });
+        const upd = () => { note.textContent = `“${b.top}” is recreated as ${dest.value.replace(/\/$/, "") || ""}/${b.top} — files with the same name are replaced, other files are left alone.`; };
+        dest.addEventListener("input", upd); upd();
+        put(el("h4", { text: "Restore this folder" }),
+          b.parent ? null : el("p", { class: "bk-warnline", text: "This archive doesn't say where it came from — pick the folder to restore into." }),
+          b.guessed && b.parent ? el("p", { class: "muted", style: "margin:0 0 8px", text: `Original place guessed from the folder ${b.parent}/${b.top} that exists on this Pi.` }) : null,
+          field("Restore into", dest), note,
+          el("div", { class: "bk-row-btns" }, [
+            armed("Restore", "Click again to overwrite", async (x) => {
+              x.disabled = true;
+              try { started(await API.backupRestore(b.name, dest.value.trim()), "Restore started"); } catch (e) { toast(e.message, "bad"); }
+              x.disabled = false;
+            }, "btn-primary"),
+            btn("Cancel", close, "btn-ghost")]));
+      } else if (b.kind === "sql") {
+        const dbs = (data && data.databases) || { mysql: [], pgsql: [] };
+        let engine = b.engine || (dbs.mysql_ok ? "mysql" : "pgsql");
+        const engSel = el("select", {}, ["mysql", "pgsql"].map((e) => el("option", { value: e, text: ENG[e] })));
+        engSel.value = engine;
+        const dl = el("datalist", { id: `bk-dl-${Math.random().toString(36).slice(2)}` });
+        const target = el("input", { type: "text", value: b.db || "", list: dl.id, maxlength: 64 });
+        const wipe = el("input", { type: "checkbox" }); wipe.checked = true;
+        const note = el("p", { class: "dm-hint" });
+        const upd = () => {
+          engine = engSel.value;
+          dl.innerHTML = ""; (dbs[engine] || []).forEach((d) => dl.append(el("option", { value: d })));
+          const t = target.value.trim(), exists = (dbs[engine] || []).includes(t);
+          note.textContent = !t ? "Type a database name." : exists
+            ? (wipe.checked ? `${t} exists: it's emptied, then filled from the dump.` : `${t} exists: tables in the dump replace the same tables; anything else stays.`)
+            : `${t} doesn't exist yet: it's created and the dump is imported into it.`;
+        };
+        [engSel, target, wipe].forEach((x) => x.addEventListener(x === target ? "input" : "change", upd)); upd();
+        put(el("h4", { text: "Restore or import this dump" }),
+          el("div", { class: "net-form" }, [b.engine ? null : field("Database server", engSel), field("Into database", target, b.db_guessed ? "Name suggested from the file — pick an existing database or type any new name." : `Original: ${b.db}. Type another name to import a copy.`), dl].filter(Boolean)),
+          el("label", { class: "dm-check", style: "margin:10px 0 4px" }, [wipe, el("span", { text: "Empty the database first (recommended — leftovers can clash with the dump)" })]),
+          note,
+          el("div", { class: "bk-row-btns" }, [
+            armed("Restore database", "Click again to confirm", async (x) => {
+              x.disabled = true;
+              try { started(await API.backupRestoreDb({ name: b.name, target: target.value.trim(), engine: engSel.value, wipe: wipe.checked }), "Import started"); }
+              catch (e) { toast(e.message, "bad"); }
+              x.disabled = false;
+            }, "btn-primary"),
+            btn("Cancel", close, "btn-ghost")]));
+      } else if (b.kind === "wizard") {
+        const picks = [];
+        const grp = (title, list2, kind) => list2.length ? el("div", { class: "bw-group" }, [el("h4", { text: title }), ...list2.map((it) => {
+          const c = el("input", { type: "checkbox" }); c.checked = true;
+          const into = kind === "path" ? null : el("input", { type: "text", value: it, maxlength: 64, class: "bk-into", title: "Database to restore into" });
+          picks.push({ kind, it, c, into });
+          return el("div", { class: "bk-pick" }, [el("label", { class: "dm-check" }, [c, el("code", { class: "net-mono", text: it })]),
+            into ? el("span", { class: "bk-into-wrap" }, ["→", into]) : null]);
+        })]) : null;
+        const dest = el("input", { type: "text", value: "/" });
+        const wipe = el("input", { type: "checkbox" }); wipe.checked = true;
+        put(el("h4", { text: "Pick what to bring back" }),
+          kv([["Made", b.created ? new Date(b.created * 1000).toLocaleString() : "—"], ["On", b.host || "—"]]),
+          grp("Folders", b.paths || [], "path"), grp("MariaDB databases", b.mysql || [], "mysql"), grp("PostgreSQL databases", b.pgsql || [], "pgsql"),
+          (b.paths || []).length ? field("Put folders under", dest, "/ = their original location. Any other folder keeps the full path inside it (e.g. /tmp/check/home/a51).") : null,
+          ((b.mysql || []).length + (b.pgsql || []).length) ? el("label", { class: "dm-check", style: "margin:10px 0 4px" }, [wipe, el("span", { text: "Empty each database first (rename the target to import a copy instead)" })]) : null,
+          el("div", { class: "bk-row-btns" }, [
+            armed("Restore selected", "Click again to overwrite", async (x) => {
+              const sel = picks.filter((p) => p.c.checked);
+              if (!sel.length) { toast("Tick what to restore", "bad"); return; }
+              const body = { name: b.name, dest: dest.value.trim() || "/", wipe: wipe.checked, rename: {},
+                paths: sel.filter((p) => p.kind === "path").map((p) => p.it),
+                mysql: sel.filter((p) => p.kind === "mysql").map((p) => p.it), pgsql: sel.filter((p) => p.kind === "pgsql").map((p) => p.it) };
+              sel.filter((p) => p.into && p.into.value.trim() && p.into.value.trim() !== p.it).forEach((p) => { body.rename[`${p.kind}:${p.it}`] = p.into.value.trim(); });
+              x.disabled = true;
+              try { started(await API.backupWizardRestore(body), "Restore started"); } catch (e) { toast(e.message, "bad"); }
+              x.disabled = false;
+            }, "btn-primary"),
+            btn("Cancel", close, "btn-ghost")]));
+      }
+    }
+
+    function drawList() {
+      if (!data) return;
+      drawChips();
+      list.innerHTML = "";
+      const shown = data.backups.filter((b) => inCat(b, cat) && (!query || b.name.toLowerCase().includes(query)));
+      if (!data.backups.length) list.append(el("div", { class: "bk-empty" }, [icon("backup", 28), el("b", { text: "No backups yet" }), el("span", { class: "muted", text: "Back up a folder or a database above, or upload a dump to import." })]));
+      else if (!shown.length) list.append(el("p", { class: "empty", text: query ? "Nothing matches that filter." : "Nothing in this category yet." }));
+      for (const b of shown) list.append(items.get(b.name).node);
+      where.textContent = `Stored in ${data.dir} · ${data.backups.length} file${data.backups.length === 1 ? "" : "s"}, ${fmtBytes(data.backups.reduce((a, b) => a + b.size, 0))}`;
+      renderJobs(lastJobs);
+    }
+
+    // ---------------- Jobs: one orange bar per running job, under its file ----------------
+    let lastJobs = [], timer = null, alive = true, firstLoad = true, skew = 0;
+    function jobNode(j) {
+      let n = jobNodes.get(j.id);
+      if (!n) {
+        const bar = el("div", { class: "bk-bar" }, el("span"));
+        const line = el("div", { class: "bk-job-line" });
+        const tools = el("div", { class: "bk-job-tools" });
+        const log = el("pre", { class: "log bk-log", hidden: true });
+        n = el("div", { class: "bk-job" }, [el("div", { class: "bk-job-top" }, [line, tools]), bar, log]);
+        Object.assign(n, { bar, line, tools, log });
+        jobNodes.set(j.id, n);
+      }
+      return n;
+    }
+    function fillJob(n, j) {
+      const op = j.meta.op;
+      const pct = j.progress;
+      const el2 = (Date.now() / 1000 + skew) - j.started;  // the Pi's clock, not the browser's
+      n.className = `bk-job ${j.status}`;
+      n.bar.classList.toggle("indet", j.status === "running" && pct == null);
+      n.bar.firstChild.style.width = `${j.status === "running" ? (pct == null ? 35 : Math.max(2, pct)) : 100}%`;
+      n.line.innerHTML = "";
+      if (j.status === "running") {
+        const verb = op === "create" ? "Creating" : "Restoring";
+        const eta = pct > 3 ? el2 / pct * (100 - pct) : null;
+        n.line.append(el("span", { class: "bk-spin" }), el("b", { text: `${verb}${j.meta.dest ? " into " + j.meta.dest : ""}` }),
+          el("span", { class: "muted", text: ` · ${j.stage || "Working…"}` }),
+          el("span", { class: "bk-pct", text: pct == null ? dur(el2) : `${pct.toFixed(pct < 10 ? 1 : 0)}%` }),
+          eta != null ? el("span", { class: "muted", text: ` · ~${dur(eta)} left` }) : "");
+      } else {
+        const ok = j.status === "done";
+        const last = (j.output || "").trim().split("\n").filter(Boolean).pop() || "";
+        n.line.append(el("span", { class: `bk-badge ${ok ? "good" : "bad"}`, text: ok ? "✓" : "!" }),
+          el("b", { text: ok ? (op === "create" ? "Created" : `Restored${j.meta.dest ? " to " + j.meta.dest : ""}`) : "Failed" }),
+          el("span", { class: "muted", text: ok ? ` · took ${dur((j.finished || j.started) - j.started)} · ${new Date((j.finished || j.started) * 1000).toLocaleTimeString()}` : ` · ${last.replace(/^✖\s*/, "")}` }));
+      }
+      n.tools.innerHTML = "";
+      n.tools.append(el("button", { type: "button", class: "bk-mini", text: n.log.hidden ? "Log" : "Hide log", onclick: async () => {
+        n.log.hidden = !n.log.hidden;
+        if (!n.log.hidden) { try { const full = await API.job(j.id); n.log.textContent = full.output || "(no output)"; } catch (e) { n.log.textContent = e.message; } }
+        fillJob(n, j);
+      } }));
+      if (j.status !== "running") n.tools.append(el("button", { type: "button", class: "bk-mini", title: "Dismiss", "aria-label": "Dismiss", text: "✕", onclick: () => { dismiss(j.id); n.remove(); jobNodes.delete(j.id); } }));
+      if (!n.log.hidden && j.status === "running") n.log.textContent = j.output || "";
+    }
+    function renderJobs(jobsList) {
+      const live = new Set();
+      const pendingNames = new Set(), hasResult = new Set();
+      for (const j of jobsList) {  // newest first
+        if (dismissed.has(j.id)) continue;
+        // Under each file: whatever is running, plus only the latest finished result.
+        if (j.status !== "running") { if (hasResult.has(j.meta.archive)) continue; hasResult.add(j.meta.archive); }
+        const name = j.meta.archive;
+        const it = items.get(name);
+        // A finished backup whose file has since been deleted has nothing left to show.
+        if (!it && j.meta.op !== "create") continue;
+        if (!it && j.meta.op === "create" && j.status === "done") continue;
+        const n = jobNode(j);
+        fillJob(n, j);
+        live.add(j.id);
+        if (it && !(j.meta.op === "create" && j.status === "running")) {
+          it.jobHost.append(n);  // re-appending keeps newest-first order
+        } else if (j.meta.op === "create" && (j.status === "running" || !it)) {
+          pendingNames.add(name);
+          let p = pending.querySelector(`[data-name="${CSS.escape(name)}"]`);
+          if (!p) {
+            p = el("div", { class: "bk-item pending", "data-name": name }, [el("div", { class: "bk-main" }, [
+              el("div", { class: `bk-ico ${j.meta.engine ? "db" : "files"}` }, icon(j.meta.engine ? "database" : "folder", 18)),
+              el("div", { class: "bk-name" }, [el("div", { class: "bk-title", text: name }), el("div", { class: "bk-meta muted", text: j.title })])])]);
+            pending.append(p);
+          }
+          if (n.parentNode !== p) p.append(n);
+        }
+      }
+      pending.querySelectorAll(".bk-item.pending").forEach((p) => { if (!pendingNames.has(p.dataset.name)) p.remove(); });
+      for (const [id, n] of jobNodes) if (!live.has(id)) { n.remove(); jobNodes.delete(id); }
+      for (const [name, it] of items) {
+        const run = jobsList.find((j) => j.meta.archive === name && j.status === "running");
+        it.restoreBtn.classList.toggle("busy", !!run);
+        it.restoreBtn.textContent = run ? (run.meta.op === "create" ? "Creating…" : `Restoring${run.progress != null ? " " + Math.floor(run.progress) + "%" : "…"}`) : (it.b.kind === "sql" ? "Restore / import" : "Restore");
+      }
+    }
+    async function poll(soon) {
+      if (!alive) return;
+      clearTimeout(timer);
+      if (soon) { timer = setTimeout(() => poll(), 400); return; }
+      let anyRunning = false;
+      try {
+        const r = await API.backupJobs();
+        skew = r.now - Date.now() / 1000;
+        let reload = false;
+        for (const j of r.jobs) {
+          if (j.status === "running") { anyRunning = true; seenRunning.add(j.id); continue; }
+          if (seenRunning.has(j.id)) {
+            seenRunning.delete(j.id);
+            const ok = j.status === "done";
+            toast(`${j.title}: ${ok ? "finished" : "failed"}`, ok ? "good" : "bad");
+            if (j.meta.op === "create") reload = true;
+          }
+        }
+        lastJobs = r.jobs;
+        if (reload) await load(); else renderJobs(r.jobs);
+      } catch (e) { if (e.status === 401) return location.reload(); }
+      if (alive) timer = setTimeout(() => poll(), anyRunning ? 1000 : 5000);
+    }
+    state.cleanups.push(() => { alive = false; clearTimeout(timer); });
+
+    async function load() {
+      try {
+        data = await API.backups();
+      } catch (e) {
+        if (e.status === 401) return location.reload();
+        list.innerHTML = ""; list.append(el("p", { class: "empty", text: e.message })); return;
+      }
+      const names = new Set(data.backups.map((b) => b.name));
+      for (const n of [...openPanels]) if (!names.has(n)) openPanels.delete(n);
+      items.clear();
+      for (const b of data.backups) items.set(b.name, buildItem(b));
+      if (firstLoad || mode === "database") drawCreate();
+      firstLoad = false;
+      drawList();
+    }
+    list.append(el("div", { class: "loading", text: "Loading…" }));
+    drawCreate();
     state.refreshHandler = load;
-    load();
+    load().then(() => poll());
   }
 
   // ======================================================================

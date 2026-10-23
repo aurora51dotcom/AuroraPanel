@@ -890,7 +890,20 @@ class BackupCreateBody(BaseModel):
 
 class BackupRestoreBody(BaseModel):
     name: str
-    dest: str = "/"
+    dest: str | None = None
+
+
+class BackupDbBody(BaseModel):
+    engine: str
+    db: str
+    label: str = ""
+
+
+class BackupDbRestoreBody(BaseModel):
+    name: str
+    target: str = ""
+    engine: str = ""
+    wipe: bool = True
 
 
 class BackupNameBody(BaseModel):
@@ -916,6 +929,45 @@ def api_backups_restore(body: BackupRestoreBody, user: str = auth.CurrentUser):
         return {"job": backups.restore_backup(body.name, body.dest).id}
     except backups.BackupError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/backups/database")
+def api_backups_database(body: BackupDbBody, user: str = auth.CurrentUser):
+    try:
+        return {"job": backups.backup_database(body.engine, body.db, body.label).id}
+    except backups.BackupError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.post("/api/backups/restore-db")
+def api_backups_restore_db(body: BackupDbRestoreBody, user: str = auth.CurrentUser):
+    try:
+        return {"job": backups.restore_database(body.name, body.target, body.engine, body.wipe).id}
+    except backups.BackupError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/backups/jobs")
+def api_backups_jobs(user: str = auth.CurrentUser):
+    return backups.backup_jobs()
+
+
+@app.post("/api/backups/upload")
+async def api_backups_upload(file: UploadFile = File(...), user: str = auth.CurrentUser):
+    tmp = None
+    try:
+        tmp, final = backups.upload_target(file.filename or "")
+        with open(tmp, "wb") as fh:
+            while chunk := await file.read(1 << 20):
+                fh.write(chunk)
+        return backups.finish_upload(tmp, final)
+    except backups.BackupError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except OSError as exc:
+        raise HTTPException(status_code=400, detail=f"Upload failed: {exc}")
+    finally:
+        if tmp is not None:
+            tmp.unlink(missing_ok=True)
 
 
 @app.post("/api/backups/delete")
@@ -2457,6 +2509,9 @@ class WizardBody(BaseModel):
     mysql: list[str] = []
     pgsql: list[str] = []
     label: str = ""
+    dest: str | None = None
+    rename: dict[str, str] = {}
+    wipe: bool = True
 
 
 @app.get("/api/images/info")
@@ -2600,7 +2655,8 @@ def api_backup_manifest(name: str, user: str = auth.CurrentUser):
 
 @app.post("/api/backups/wizard/restore")
 def api_backup_wizard_restore(body: WizardBody, user: str = auth.CurrentUser):
-    return _files_call(lambda: {"job": backups.wizard_restore(body.name or "", body.paths, body.mysql, body.pgsql).id})
+    return _files_call(lambda: {"job": backups.wizard_restore(body.name or "", body.paths, body.mysql, body.pgsql,
+                                                              body.dest or "/", body.rename, body.wipe).id})
 
 
 @app.get("/api/inodes")

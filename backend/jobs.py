@@ -29,6 +29,8 @@ class Job:
         self.started = time.time()
         self.finished: float | None = None
         self.meta = meta or {}
+        self.progress: float | None = None  # 0-100 when the job can tell, else None
+        self.stage = ""
         self._thread: threading.Thread | None = None
 
     def to_dict(self, tail: int | None = None) -> dict:
@@ -45,6 +47,8 @@ class Job:
             "output": "\n".join(lines),
             "line_count": len(self.lines),
             "meta": self.meta,
+            "progress": self.progress,
+            "stage": self.stage,
         }
 
     def _run(self, env: dict | None):
@@ -90,8 +94,23 @@ def launch(title: str, argv: Sequence[str], env: dict | None = None, meta: dict 
     return job
 
 
+class _Log:
+    """What FnJob passes to fn: log(line) adds an output line, log.progress(pct, stage) moves the bar."""
+
+    def __init__(self, job: "Job"):
+        self.job = job
+
+    def __call__(self, line: str) -> None:
+        self.job.lines.append(line)
+
+    def progress(self, pct: float | None, stage: str | None = None) -> None:
+        self.job.progress = None if pct is None else round(max(0.0, min(100.0, pct)), 1)
+        if stage is not None:
+            self.job.stage = stage
+
+
 class FnJob(Job):
-    """A job that runs a Python function; fn(log) writes progress via log(str)."""
+    """A job that runs a Python function; fn(log) writes progress via log(str) and log.progress()."""
 
     def __init__(self, title: str, fn, meta: dict | None = None):
         super().__init__(title, [], meta=meta)
@@ -100,8 +119,10 @@ class FnJob(Job):
 
     def _run(self, env):
         try:
-            self.result = self.fn(self.lines.append)
+            self.result = self.fn(_Log(self))
             self.returncode, self.status = 0, "done"
+            if self.progress is not None:
+                self.progress = 100.0
         except Exception as exc:  # surfaced to the UI as the job's last line
             self.lines.append(f"✖ {exc}")
             self.returncode, self.status = 1, "failed"
@@ -129,6 +150,13 @@ def launch_fn(title: str, fn, meta: dict | None = None) -> Job:
 
 def get(job_id: str) -> Job | None:
     return _jobs.get(job_id)
+
+
+def find(**meta) -> list[Job]:
+    """Jobs whose meta contains all the given key/values, newest first."""
+    with _lock:
+        found = [j for j in _jobs.values() if all(j.meta.get(k) == v for k, v in meta.items())]
+    return sorted(found, key=lambda j: j.started, reverse=True)
 
 
 def listing() -> list[dict]:

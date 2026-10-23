@@ -110,6 +110,27 @@ const API = (() => {
     backupCreate: (source, label) => request("POST", "/api/backups/create", { source, label }),
     backupRestore: (name, dest) => request("POST", "/api/backups/restore", { name, dest }),
     backupDelete: (name) => request("POST", "/api/backups/delete", { name }),
+    backupDatabase: (engine, db, label) => request("POST", "/api/backups/database", { engine, db, label }),
+    backupRestoreDb: (body) => request("POST", "/api/backups/restore-db", body),
+    backupJobs: () => request("GET", "/api/backups/jobs"),
+    // XHR rather than fetch: fetch can't report upload progress.
+    backupUpload: (file, onProgress) => new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      const form = new FormData();
+      form.append("file", file);
+      xhr.open("POST", "/api/backups/upload");
+      xhr.withCredentials = true;
+      xhr.upload.onprogress = (e) => onProgress && onProgress(e.loaded, e.lengthComputable ? e.total : file.size);
+      xhr.onload = () => {
+        let data = null;
+        try { data = JSON.parse(xhr.responseText); } catch (e) {}
+        if (xhr.status === 401) { const err = new Error("Not authenticated"); err.status = 401; reject(err); return; }
+        if (xhr.status >= 200 && xhr.status < 300) resolve(data);
+        else reject(new Error((data && data.detail) || xhr.statusText || "Upload failed"));
+      };
+      xhr.onerror = () => reject(new Error("Upload failed — connection lost"));
+      xhr.send(form);
+    }),
     backupDownloadUrl: (name) => `/api/backups/download?name=${encodeURIComponent(name)}`,
     backupWizard: () => request("GET", "/api/backups/wizard"),
     backupWizardCreate: (body) => request("POST", "/api/backups/wizard", body),
