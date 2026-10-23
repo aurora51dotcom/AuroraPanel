@@ -108,7 +108,9 @@ def _settings_from_conf(path: Path) -> dict:
              gzip=False, security_headers=False, hsts=bool(https and https["hsts"]))
     if https:
         le = str(LE_LIVE) in (https["cert"] or "")
-        s.update(ssl="letsencrypt" if le else "custom", cert=https["cert"] or "", key=https["key"] or "", chain=https["chain"] or "")
+        own = (https["cert"] or "") == str(SSL_DIR / f"{_slug(s['server_name'])}.crt")
+        s.update(ssl="letsencrypt" if le else "selfsigned" if own else "custom",
+                 cert=https["cert"] or "", key=https["key"] or "", chain=https["chain"] or "")
     if http and http["https_redirect"]:
         s["force_https"] = True
     elif main["redirect"] and not main["redirect"].group(2).startswith("https://%{"):
@@ -441,7 +443,12 @@ def _ensure_docroot(s: dict) -> None:
 def create_site(settings: dict) -> dict:
     _require()
     s = _clean(settings)
-    if _conf_for(s["server_name"]):
+    conf = _conf_for(s["server_name"])
+    if conf and conf.name in SYSTEM_CONFS:
+        raise SiteError(f"{s['server_name']} is already served by Apache's built-in site ({conf.name}, folder "
+                        f"{_settings_from_conf(_live_conf(conf))['docroot'] or '?'}). Open it with Manage to change it, "
+                        f"or create a folder site to get http://{s['server_name']}/<name>.")
+    if conf:
         raise SiteError("A site with that name already exists")
     conf = AVAIL / f"{_slug(s['server_name'])}.conf"
     if conf.exists():
@@ -563,6 +570,82 @@ def _set_system_force_https(conf: Path, on: bool) -> dict:
     if r.returncode != 0:
         _run(["systemctl", "restart", "apache2"])
     return {"ok": True}
+
+
+def set_system_ssl(conf_name: str, mode: str, cert: str = "", key: str = "", chain: str = "") -> dict:
+    """Change the certificate of the built-in https site (default-ssl) — only its SSLCertificate* lines.
+    "none" turns the site off instead; picking a certificate turns it back on."""
+    _require()
+    conf = AVAIL / conf_name
+    if conf_name not in SYSTEM_CONFS or not conf.is_file():
+        raise SiteError("Only Apache's built-in https site is changed here — use Manage → Save for other sites")
+    if _has_http(conf):
+        raise SiteError(f"{conf_name} is the http site; its certificate is set on the https (port 443) site")
+    if mode == "none":
+        return _set_system_enabled(conf, False)
+    live = _live_conf(conf)
+    text = live.read_text(errors="replace")
+    s = _settings_from_conf(live)
+    if mode == "selfsigned":
+        name = s["server_name"] if (_is_ip(s["server_name"]) or _HOST.match(s["server_name"])) else _local_ip()
+        own = {**s, "ssl": "selfsigned", "server_name": name, "aliases": [a for a in s["aliases"] if _is_ip(a) or _HOST.match(a)]}
+        _ensure_selfsigned(own)
+        cert, key, chain = _ssl_paths(own)
+    elif mode == "custom":
+        cert, key, chain = (cert or "").strip(), (key or "").strip(), (chain or "").strip()
+        for label, pth in (("certificate", cert), ("private key", key)):
+            if not pth.startswith("/") or not Path(pth).is_file():
+                raise SiteError(f"Custom SSL {label} file not found: {pth or '(empty)'}")
+        if chain and (not chain.startswith("/") or not Path(chain).is_file()):
+            raise SiteError(f"Chain file not found: {chain}")
+    else:
+        raise SiteError("Pick None, Self-signed or Custom")
+    if any(c in cert + key + chain for c in "\n\"'<>"):
+        raise SiteError("Invalid certificate path")
+    new = text
+    for directive, val in (("SSLCertificateFile", cert), ("SSLCertificateKeyFile", key)):
+        rx = re.compile(rf"(?im)^([ \t]*){directive}[ \t]+\S.*$")
+        if not rx.search(new):
+            raise SiteError(f"{live} has no {directive} line to change")
+        new = rx.sub(lambda m: f"{m.group(1)}{directive} {val}", new, count=1)
+    chain_rx = re.compile(r"(?im)^([ \t]*)SSLCertificateChainFile[ \t]+\S.*$")
+    if chain:
+        if chain_rx.search(new):
+            new = chain_rx.sub(lambda m: f"{m.group(1)}SSLCertificateChainFile {chain}", new, count=1)
+        else:
+            new = re.sub(r"(?im)^([ \t]*)(SSLCertificateKeyFile[ \t]+\S.*)$",
+                         lambda m: f"{m.group(1)}{m.group(2)}\n{m.group(1)}SSLCertificateChainFile {chain}", new, count=1)
+    else:
+        new = chain_rx.sub(lambda m: f"{m.group(1)}#SSLCertificateChainFile", new)
+    if new != text:
+        SITE_BAK.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(live, SITE_BAK / f"{conf.name}.{int(time.time())}")
+        live.write_text(new, encoding="utf-8")
+        test = _run(["apache2ctl", "configtest"])
+        if test.returncode != 0:
+            live.write_text(text, encoding="utf-8")
+            err = "\n".join(l for l in (test.stderr + test.stdout).splitlines() if "AH00558" not in l).strip()
+            raise SiteError("Apache rejected the certificate, nothing was changed:\n" + err[:1500])
+    if not (ENABLED / conf.name).exists():
+        try:
+            return _set_system_enabled(conf, True)   # reloads Apache
+        except SiteError:
+            live.write_text(text, encoding="utf-8")
+            raise
+    r = _run(["systemctl", "reload", "apache2"])
+    if r.returncode != 0:
+        _run(["systemctl", "restart", "apache2"])
+    return {"ok": True}
+
+
+def _local_ip() -> str:
+    import socket
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as so:
+            so.connect(("192.0.2.1", 80))
+            return so.getsockname()[0]
+    except OSError:
+        return "127.0.0.1"
 
 
 def remove_site(name: str) -> dict:

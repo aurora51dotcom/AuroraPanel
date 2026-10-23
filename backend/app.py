@@ -1493,6 +1493,19 @@ def api_site_toggle(body: SiteToggleBody, user: str = auth.CurrentUser):
     return _site_call(sites.quick_toggle, body.server_name, body.key, body.value)
 
 
+class SystemSslBody(BaseModel):
+    conf: str
+    ssl: str
+    cert: str = ""
+    key: str = ""
+    chain: str = ""
+
+
+@app.post("/api/sites/system-ssl")
+def api_site_system_ssl(body: SystemSslBody, user: str = auth.CurrentUser):
+    return _site_call(sites.set_system_ssl, body.conf, body.ssl, body.cert, body.key, body.chain)
+
+
 @app.post("/api/sites/remove")
 def api_site_remove(body: DomainNameBody, user: str = auth.CurrentUser):
     return _site_call(sites.remove_site, body.server_name)

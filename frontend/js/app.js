@@ -4050,11 +4050,11 @@
           ])),
           el("td", {}, el("span", { class: "dm-root" }, [icon("home", 13), " ", s.docroot || "—"])),
           el("td", { class: s.redirect_url ? "" : "muted", text: s.redirect_url || "Not Redirected" }),
-          el("td", {}, sw(s.force_https, async (v, inp) => {
+          s.system && !s.has_http ? el("td", { class: "muted", title: "This is the https site itself — Force HTTPS is set on the http (port 80) row", text: "already https" }) : el("td", {}, sw(s.force_https, async (v, inp) => {
             if (v && s.ssl === "none" && !s.system && !confirmInline(`${s.server_name} has no certificate yet.\n\nA self-signed certificate will be created so HTTPS works now (browsers will warn). You can switch to a free Let's Encrypt certificate in Manage.\n\nContinue?`)) { inp.checked = false; return; }
             try { await API.siteToggle(s.system ? s.conf : s.server_name, "force_https", v); toast(`Force HTTPS ${v ? "on" : "off"} · ${s.server_name}`, "good"); load(); }
             catch (e) { inp.checked = !v; toast(e.message, "bad"); }
-          }, { disabled: s.system && !s.has_http, title: s.system && !s.has_http ? "This is the HTTPS site — turn on Force HTTPS on the default (http) site" : "Redirect all HTTP traffic to HTTPS" })),
+          }, { title: "Redirect all HTTP traffic to HTTPS" })),
           el("td", {}, sslPill(s)),
           el("td", { class: "actions" }, [
             el("button", { class: "btn btn-sm", onclick: () => openDomain(s.system ? s.conf : s.server_name) }, [icon("services", 13), " Manage"]),
@@ -4162,9 +4162,13 @@
       <label class="dm-check"><input id="nd-zone" type="checkbox" /> Create a DNS zone for it in the Zone Editor</label>
       <p class="muted" style="font-size:12px;margin:4px 0 0">Local names like <code>mysite.test</code> work too — you'll get the hosts-file line to add on your computer. No domain? Enter this Pi's IP to serve a folder at <code>http://&lt;ip&gt;/</code>.</p>`;
     const name = $("#nd-name", domainBox), rootIn = $("#nd-root", domainBox);
+    // The document root fills itself in from the name until it's edited by hand.
+    let rootTouched = false;
+    rootIn.addEventListener("input", () => { rootTouched = !!rootIn.value.trim(); });
     name.addEventListener("input", () => {
       const n = name.value.trim().toLowerCase() || "example.com";
       rootIn.placeholder = `/var/www/${n}`;
+      if (!rootTouched) rootIn.value = name.value.trim() ? `/var/www/${n}` : "";
       $("#nd-www-l", f).textContent = n.startsWith("www.") ? n.slice(4) : "www." + n;
       const ip = isIp(n);
       ["#nd-www", "#nd-zone"].forEach((id) => { const c = $(id, f); c.disabled = ip; if (ip) c.checked = false; c.parentElement.classList.toggle("dm-dim", ip); });
@@ -4216,6 +4220,7 @@
       const ipSite = isIp(d.settings.server_name);
       root.innerHTML = "";
       const dirty = () => { const x = JSON.stringify(s) !== orig; saveBar.classList.toggle("show", x && !ro); };
+      if (!d.enabled && d.system && !d.has_http) s.ssl = "none";  // a disabled https site serves nothing
 
       const head = el("div", { class: "dmm-head" }, [
         el("button", { class: "btn btn-sm btn-ghost", onclick: () => navigate("vhosts") }, [el("span", { class: "dmm-back", html: "&larr;" }), " Domains"]),
@@ -4224,7 +4229,7 @@
         el("a", { class: "btn btn-sm", href: `${d.settings.ssl !== "none" ? "https" : "http"}://${d.settings.server_name}/`, target: "_blank", rel: "noopener" }, [icon("link", 13), " Visit site"]),
       ]);
       root.append(head);
-      if (ro) root.append(el("div", { class: "dm-note warn" }, [icon("lock", 15), el("span", { text: "This is a system default site (" + d.conf + "). Its settings are read-only so the panel never breaks Apache's fallback site, but you can turn it on or off and use Force HTTPS." }),
+      if (ro) root.append(el("div", { class: "dm-note warn" }, [icon("lock", 15), el("span", { text: "This is one of Apache's two built-in sites (" + d.conf + (d.has_http ? ", http on port 80" : ", https on port 443") + "). Both answer on this Pi's address, so they show the same name. They can't be removed (Apache falls back to them), and the rest of their settings are read-only, but you can turn them on or off" + (d.has_http ? " and use Force HTTPS." : " and change the certificate.") }),
         el("button", { class: "btn btn-sm", style: "margin-left:auto;flex-shrink:0", text: d.enabled ? "Disable site" : "Enable site", onclick: async (e) => {
           e.target.disabled = true;
           try { await API.siteToggle(d.conf, "enabled", !d.enabled); toast(`${d.settings.server_name} ${d.enabled ? "disabled" : "enabled"}`, "good"); load(); }
@@ -4238,14 +4243,16 @@
       const card = (ico, title, sub, ...kids) => el("div", { class: "card dmm-card" }, [
         el("div", { class: "cw-card-h" }, [icon(ico, 16), el("div", {}, [el("h3", { text: title }), sub ? el("p", { text: sub }) : null])]), ...kids]);
       const field = (label, input, hint) => el("label", { class: "cw-lbl" }, [label, input, hint ? el("span", { class: "dm-hint", text: hint }) : null]);
-      const text = (key, ph) => { const i = el("input", { type: "text", value: s[key] || "", placeholder: ph || "", oninput: (e) => { s[key] = e.target.value; dirty(); } }); if (ro) i.disabled = true; return i; };
+      // The built-in https site keeps its settings read-only except the certificate, applied with its own button.
+      const sysSsl = ro && !d.has_http;
+      const text = (key, ph, editable) => { const i = el("input", { type: "text", value: s[key] || "", placeholder: ph || "", oninput: (e) => { s[key] = e.target.value; dirty(); } }); if (ro && !editable) i.disabled = true; return i; };
       const toggleRow = (key, title, desc, onChange) => el("div", { class: "dm-trow" }, [
         el("div", {}, [el("b", { text: title }), el("span", { text: desc })]),
         sw(s[key], (v) => { s[key] = v; onChange && onChange(v); dirty(); }, { disabled: ro }),
       ]);
-      const seg = (key, opts, onChange) => {
+      const seg = (key, opts, onChange, editable) => {
         const box = el("div", { class: "cw-seg cw-seg-sm" });
-        opts.forEach(([v, l]) => box.append(el("button", { type: "button", class: s[key] === v ? "active" : "", text: l, disabled: ro ? "" : null, onclick: () => {
+        opts.forEach(([v, l]) => box.append(el("button", { type: "button", class: s[key] === v ? "active" : "", text: l, disabled: ro && !editable ? "" : null, onclick: () => {
           s[key] = v; box.querySelectorAll("button").forEach((b) => b.classList.toggle("active", b.textContent === l)); onChange && onChange(v); dirty();
         } })));
         return box;
@@ -4282,7 +4289,18 @@
         sslDetail.innerHTML = "";
         if (s.ssl === "none") sslDetail.append(el("p", { class: "dm-hint", text: "Visitors can only reach the site over plain http://. Pick a certificate to enable HTTPS." }));
         if (s.ssl === "selfsigned") sslDetail.append(el("p", { class: "dm-hint", text: "A certificate is generated on this Pi (covers the domain + aliases). Encrypts traffic, but browsers show a warning — fine for LAN/.test sites." }));
-        if (s.ssl === "custom") sslDetail.append(field("Certificate file (.crt / fullchain.pem)", text("cert", "/etc/ssl/certs/site.crt")), field("Private key", text("key", "/etc/ssl/private/site.key")), field("Chain (optional)", text("chain", "")));
+        if (s.ssl === "none" && sysSsl) { sslDetail.innerHTML = ""; sslDetail.append(el("p", { class: "dm-hint", text: "None turns this https site (port 443) off. http:// keeps working through the default http site." })); }
+        if (s.ssl === "custom") sslDetail.append(field("Certificate file (.crt / fullchain.pem)", text("cert", "/etc/ssl/certs/site.crt", sysSsl)), field("Private key", text("key", "/etc/ssl/private/site.key", sysSsl)), field("Chain (optional)", text("chain", "", sysSsl)));
+        if (sysSsl) {
+          const apply = el("button", { class: "btn btn-primary btn-sm", type: "button", onclick: async () => {
+            if (s.ssl === "none" && !confirmInline(`Turn off ${d.conf} (https on port 443)? You can turn it back on with Self-signed or Custom, or Enable site.`)) return;
+            apply.disabled = true;
+            try { await API.siteSystemSsl(d.conf, s.ssl, s.cert, s.key, s.chain); toast(s.ssl === "none" ? `${d.conf} turned off` : "Certificate applied & Apache reloaded", "good"); load(); }
+            catch (e) { openModal("Couldn't change the certificate", el("pre", { class: "log", text: e.message }), []); apply.disabled = false; }
+          } }, [icon("lock", 13), " Apply certificate"]);
+          sslDetail.append(el("div", {}, apply));
+          return;
+        }
         if (s.ssl === "letsencrypt") {
           const email = el("input", { type: "email", placeholder: "you@example.com", value: (() => { try { return localStorage.getItem("aurora-le-email") || ""; } catch (e) { return ""; } })() });
           const withAliases = el("input", { type: "checkbox" }); withAliases.checked = true;
@@ -4340,8 +4358,9 @@
         toggleRow("hsts", "HSTS", "Tell browsers to only ever use HTTPS for a year. Enable once HTTPS is working reliably."),
       ]);
       const syncHttps = () => httpsToggles.classList.toggle("dm-dim", s.ssl === "none" && !ro);
+      if (sysSsl) httpsToggles.hidden = true;  // Force HTTPS lives on the http site; HSTS is read-only here
       left.append(card("lock", "HTTPS / SSL", "Encrypt traffic and choose where the certificate comes from.",
-        seg("ssl", [["none", "None"], ["selfsigned", "Self-signed"], ...(ipSite ? [] : [["letsencrypt", "Let's Encrypt"]]), ["custom", "Custom"]], (v) => { if (v === "none") { s.force_https = false; s.hsts = false; httpsToggles.querySelectorAll(".sw-in").forEach((i) => { i.checked = false; }); } drawSsl(); syncHttps(); }),
+        seg("ssl", [["none", "None"], ["selfsigned", "Self-signed"], ...(ipSite || sysSsl ? [] : [["letsencrypt", "Let's Encrypt"]]), ["custom", "Custom"]], (v) => { if (v === "none" && !sysSsl) { s.force_https = false; s.hsts = false; httpsToggles.querySelectorAll(".sw-in").forEach((i) => { i.checked = false; }); } drawSsl(); syncHttps(); }, sysSsl),
         certRow, sslDetail, httpsToggles));
       syncHttps();
 
