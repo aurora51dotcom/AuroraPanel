@@ -3,7 +3,7 @@
 #
 #   sudo bash install.sh                 # interactive: asks which port
 #   sudo bash install.sh --port 9000     # non-interactive
-#   sudo bash install.sh --uninstall     # remove the service (keeps files)
+#   sudo bash install.sh --uninstall     # remove AuroraPanel completely (asks first)
 #
 # Installs in place (the folder this script lives in): creates .venv, installs
 # Python deps, and registers a systemd service "aurorapanel" that starts on
@@ -67,22 +67,126 @@ if [ $UNINSTALL = 1 ]; then
     ok "Uninstall continues in the background. Check it with: journalctl -u ${SERVICE}-uninstall"
     exit 0
   fi
-  say "Removing the ${SERVICE} service"
   OLD_PORT=""
   [ -f "$UNIT" ] && OLD_PORT="$(sed -n 's/^Environment=PORT=\([0-9]*\).*/\1/p' "$UNIT" | head -n1)"
+  BACKUPS="$(sed -n 's/^Environment=AURORA_BACKUP_DIR=//p' "$UNIT" 2>/dev/null | head -n1 || true)"
+  BACKUPS="${BACKUPS:-/root/aurora-backups}"
+
+  if [ $ASSUME_YES = 0 ]; then
+    echo
+    echo "${c_hi}  Uninstall AuroraPanel completely${c_off}"
+    echo
+    echo "  This removes:"
+    echo "    - the panel service, its HTTPS certificate and its ufw rule"
+    echo "    - its helpers: IP bans/trusted list, Network Monitor, VPN NAT, Dynamic DNS"
+    echo "    - its fail2ban jails, filters and ban action"
+    echo "    - its Apache/MariaDB settings, Web Disk and Directory Privacy"
+    echo "    - everything in /var/lib/aurora (VPN client lists, file recycle bin, site backups)"
+    echo "    - the program files in ${APP_DIR} (and your panel login)"
+    echo
+    echo "  Kept: your websites, databases, VPN servers, FTP and Linux users, installed"
+    echo "  software, and backups in ${BACKUPS}."
+    if [ -s /etc/apache2/conf-available/zz-aurora-privacy.conf ]; then
+      echo
+      warn "Folders protected with Directory Privacy will no longer ask for a password."
+    fi
+    echo
+    [ -t 0 ] || die "Re-run with --yes to uninstall without a prompt."
+    read -r -p "  Type 'yes' to uninstall: " ANSWER
+    [ "$ANSWER" = "yes" ] || die "Cancelled — nothing was removed."
+  fi
+
+  # Started from the panel's own Terminal, this shell lives in the service's cgroup:
+  # stopping the service kills this script halfway. Hand the job to a transient unit
+  # outside the panel and let it finish there.
+  if [ -z "${AURORA_DETACHED:-}" ] && grep -q "/${SERVICE}\.service" /proc/self/cgroup 2>/dev/null; then
+    warn "Running inside AuroraPanel's Terminal — the panel and this terminal will close."
+    systemd-run --quiet --collect --unit="${SERVICE}-uninstall" --setenv=AURORA_DETACHED=1 \
+      /bin/bash "${APP_DIR}/$(basename "${BASH_SOURCE[0]}")" --uninstall --yes \
+      || die "Could not start the uninstall in the background."
+    ok "Uninstall continues in the background. Check it with: journalctl -u ${SERVICE}-uninstall"
+    exit 0
+  fi
+
+  say "Removing the ${SERVICE} service"
+  systemctl stop "${SERVICE}-https-revert.timer" "${SERVICE}-https-revert.service" 2>/dev/null || true
+  for u in $(systemctl list-units --all --plain --no-legend "${SERVICE}-restart-*" 2>/dev/null | awk '{print $1}'); do
+    systemctl stop "$u" 2>/dev/null || true
+  done
   systemctl disable --now "$SERVICE" 2>/dev/null || true
-  rm -f "$UNIT" "/etc/systemd/system/${SERVICE}.service.d/aurora-https.conf" "/etc/letsencrypt/renewal-hooks/deploy/${SERVICE}-restart"
-  rmdir "/etc/systemd/system/${SERVICE}.service.d" 2>/dev/null || true
-  systemctl daemon-reload
-  systemctl reset-failed "$SERVICE" 2>/dev/null || true
-  ok "Service removed"
+  rm -rf "$UNIT" "/etc/systemd/system/${SERVICE}.service.d" "/etc/letsencrypt/renewal-hooks/deploy/${SERVICE}-restart"
   if [ -n "$OLD_PORT" ] && command -v ufw >/dev/null && ufw status 2>/dev/null | grep -qE "^${OLD_PORT}/tcp"; then
     ufw delete allow "${OLD_PORT}/tcp" >/dev/null && ok "Removed the ufw rule for ${OLD_PORT}/tcp"
   fi
-  # Helpers the panel set up (bans, monitor, VPN NAT) keep running on purpose — list them.
-  LEFT="$(systemctl list-unit-files 'aurora-*' --no-legend 2>/dev/null | awk '{print $1}' | tr '\n' ' ')"
-  [ -n "$LEFT" ] && warn "Still installed (used by fail2ban/VPN features, not removed): ${LEFT}"
-  ok "Files in ${APP_DIR} were left untouched (delete the folder to remove AuroraPanel completely)."
+  ok "Service removed"
+
+  say "Removing helpers"
+  HELPERS=(aurora-ddns.timer aurora-ddns.service aurora-guard.service aurora-netmon.service aurora-vpn-nat.service)
+  for u in "${HELPERS[@]}"; do
+    systemctl disable --now "$u" 2>/dev/null || true
+    rm -f "/etc/systemd/system/$u"
+  done
+  if command -v nft >/dev/null; then
+    for t in "inet aurora_guard" "inet aurora_mon" "ip aurora_vpn"; do
+      # shellcheck disable=SC2086
+      nft delete table $t 2>/dev/null || true
+    done
+  fi
+  rm -f /usr/local/sbin/aurora-guard-ban /etc/sysctl.d/99-aurora-vpn.conf
+  systemctl daemon-reload
+  systemctl reset-failed "$SERVICE" "${HELPERS[@]}" 2>/dev/null || true
+  ok "Bans, Network Monitor, VPN NAT and Dynamic DNS removed"
+
+  if [ -e /etc/fail2ban/jail.d/zz-aurora.local ] || [ -e /etc/fail2ban/action.d/aurora-guard.conf ]; then
+    rm -f /etc/fail2ban/jail.d/zz-aurora.local /etc/fail2ban/action.d/aurora-guard.conf /etc/fail2ban/filter.d/aurora-*.conf
+    systemctl try-restart fail2ban 2>/dev/null || true
+    ok "fail2ban is back to its own defaults"
+  fi
+
+  if [ -d /etc/apache2 ]; then
+    APACHE_CHANGED=0
+    for c in zz-aurora-tuning zz-aurora-privacy zz-aurora-webdisk zz-aurora-phppgadmin; do
+      if [ -e "/etc/apache2/conf-available/$c.conf" ] || [ -L "/etc/apache2/conf-enabled/$c.conf" ]; then
+        rm -f "/etc/apache2/conf-enabled/$c.conf" "/etc/apache2/conf-available/$c.conf"
+        APACHE_CHANGED=1
+      fi
+    done
+    if [ -e /etc/apache2/sites-available/zz-aurora-webdisk-ssl.conf ] || [ -L /etc/apache2/sites-enabled/zz-aurora-webdisk-ssl.conf ]; then
+      rm -f /etc/apache2/sites-enabled/zz-aurora-webdisk-ssl.conf /etc/apache2/sites-available/zz-aurora-webdisk-ssl.conf
+      APACHE_CHANGED=1
+    fi
+    rm -rf /etc/apache2/aurora-privacy /etc/apache2/aurora-webdisk.htpasswd /etc/apache2/ssl/aurora /var/lib/apache2/aurora-davlock
+    if [ $APACHE_CHANGED = 1 ] && systemctl is-active --quiet apache2; then
+      if apache2ctl -t >/dev/null 2>&1; then
+        systemctl reload apache2 && ok "Apache settings removed (Apache reloaded)"
+      else
+        warn "Apache's config doesn't pass 'apache2ctl -t' — fix it, then reload Apache"
+      fi
+    fi
+  fi
+  if [ -e /etc/mysql/mariadb.conf.d/99-aurora.cnf ]; then
+    rm -f /etc/mysql/mariadb.conf.d/99-aurora.cnf
+    ok "MariaDB settings removed (they stop applying at MariaDB's next restart)"
+  fi
+
+  rm -rf /var/lib/aurora
+  ok "Removed /var/lib/aurora"
+
+  # Only the files AuroraPanel ships (and what it made there) — never anything else
+  # that happens to share the folder.
+  say "Removing the program files"
+  for f in backend frontend deploy .venv install.sh run.sh run.bat requirements.txt README.md LICENSE \
+           .gitattributes .gitignore .git aurora_config.json aurora_config.tmp; do
+    rm -rf "${APP_DIR:?}/$f"
+  done
+  if rmdir "$APP_DIR" 2>/dev/null; then
+    ok "Removed ${APP_DIR}"
+  else
+    ok "Program files removed; other files you put in ${APP_DIR} were left there"
+  fi
+  echo
+  echo "${c_hi}  AuroraPanel has been uninstalled.${c_off}"
+  [ -d "$BACKUPS" ] && echo "  Your backups are still in ${BACKUPS}."
   exit 0
 fi
 
@@ -174,6 +278,29 @@ if ! .venv/bin/python -m pip install --quiet -r requirements.txt; then
 fi
 ok "Dependencies installed"
 
+# --- leftovers from earlier installs ----------------------------------------
+# A Panel HTTPS drop-in whose certificate is gone or broken would stop the panel
+# from starting at all: fall back to plain HTTP instead.
+DROPIN="/etc/systemd/system/${SERVICE}.service.d/aurora-https.conf"
+if [ -f "$DROPIN" ]; then
+  CRT="$(sed -n 's/^Environment=UVICORN_SSL_CERTFILE=//p' "$DROPIN" | head -n1)"
+  KEY="$(sed -n 's/^Environment=UVICORN_SSL_KEYFILE=//p' "$DROPIN" | head -n1)"
+  if ! .venv/bin/python -c 'import ssl,sys; ssl.create_default_context(ssl.Purpose.CLIENT_AUTH).load_cert_chain(sys.argv[1], sys.argv[2])' \
+       "$CRT" "$KEY" 2>/dev/null; then
+    rm -f "$DROPIN"
+    rmdir "$(dirname "$DROPIN")" 2>/dev/null || true
+    warn "Panel HTTPS was on but its certificate is missing or broken — switched back to HTTP (turn it on again under Security → Panel HTTPS)"
+  fi
+fi
+# Dynamic DNS runs this folder's Python; point it here if the panel was installed elsewhere before.
+DDNS_UNIT=/etc/systemd/system/aurora-ddns.service
+if [ -f "$DDNS_UNIT" ] && ! grep -qxF "WorkingDirectory=${APP_DIR}" "$DDNS_UNIT"; then
+  sed -i -e "s|^WorkingDirectory=.*|WorkingDirectory=${APP_DIR}|" \
+         -e "s|^ExecStart=[^ ]*|ExecStart=${APP_DIR}/.venv/bin/python|" "$DDNS_UNIT"
+  ok "Dynamic DNS now runs from ${APP_DIR}"
+fi
+systemctl reset-failed "$SERVICE" 2>/dev/null || true
+
 # --- systemd unit -----------------------------------------------------------
 say "Writing ${UNIT}"
 # Keep any custom AURORA_* settings from a previous install.
@@ -223,12 +350,13 @@ fi
 
 # --- health check -----------------------------------------------------------
 say "Waiting for AuroraPanel to start"
-# Panel HTTPS (Security page) is a drop-in that this unit rewrite leaves in place.
+# Panel HTTPS (Security page) is a drop-in that this unit rewrite leaves in place,
+# so the panel may answer on either scheme.
 SCHEME=http
-grep -qs '^Environment=UVICORN_SSL_CERTFILE=' "/etc/systemd/system/${SERVICE}.service.d/aurora-https.conf" && SCHEME=https
 UP=0
 for _ in $(seq 1 30); do
-  if curl -fsk -o /dev/null "${SCHEME}://127.0.0.1:${PORT}/"; then UP=1; break; fi
+  if curl -fsk -o /dev/null --max-time 3 "https://127.0.0.1:${PORT}/"; then SCHEME=https; UP=1; break; fi
+  if curl -fs -o /dev/null --max-time 3 "http://127.0.0.1:${PORT}/"; then UP=1; break; fi
   sleep 1
 done
 if [ $UP = 0 ]; then
@@ -251,5 +379,5 @@ if [ ! -f "$APP_DIR/aurora_config.json" ]; then
 fi
 echo "  Change the port later:  sudo bash ${APP_DIR}/install.sh"
 echo "  Logs:                   sudo journalctl -u ${SERVICE} -f"
-echo "  Uninstall service:      sudo bash ${APP_DIR}/install.sh --uninstall"
+echo "  Uninstall completely:   sudo bash ${APP_DIR}/install.sh --uninstall"
 echo

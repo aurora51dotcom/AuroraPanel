@@ -70,7 +70,7 @@ starts on boot. It then prints the URLs to open, e.g. `http://<pi-ip>:8088`.
 | `sudo bash install.sh` | Interactive install (prompts for port) |
 | `sudo bash install.sh --port 9000` | Non-interactive install on port 9000 |
 | `sudo bash install.sh` (again) | Change the port / repair; keeps your admin account |
-| `sudo bash install.sh --uninstall` | Remove the service (files are kept) |
+| `sudo bash install.sh --uninstall` | Remove AuroraPanel completely (asks first; add `--yes` to skip the question) |
 
 If `ufw` is active, the chosen port is allowed automatically. The panel runs as
 **root** so it can control services and read privileged files;
