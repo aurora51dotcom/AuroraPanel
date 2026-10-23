@@ -7045,7 +7045,7 @@
         el("div", { class: "toolbar", style: "margin:16px 0 0" }, [check, viewChanges,
           el("a", { class: "btn btn-sm btn-ghost", href: REDDIT_URL, target: "_blank", rel: "noopener noreferrer", text: "Feedback on Reddit ↗" }),
           el("a", { class: "btn btn-sm btn-ghost", href: FORUM_URL, target: "_blank", rel: "noopener noreferrer", text: "Raspberry Pi Forums ↗" })]),
-        el("p", { class: "dm-hint", text: "The panel never contacts the internet on its own — it only asks aurora51.com for the latest version or the change log when you click one of these buttons." }),
+        el("div", { class: "about-privacy" }, [icon("lock", 14), el("span", { text: "The panel never contacts the internet on its own — it only asks aurora51.com for the latest version or the change log when you click one of these buttons." })]),
       ]), changes, result);
 
       function showChanges(c) {

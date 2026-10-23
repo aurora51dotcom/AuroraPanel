@@ -1375,3 +1375,8 @@ pre.log { background: rgba(0,0,0,0.35); border: 1px solid var(--stroke); border-
   .ax-spark, .ax-bar > span, .ax-check li.on::before { animation: none !important; }
   .ax-card:hover { transform: none; }
 }
+
+.about-privacy { display: flex; align-items: flex-start; gap: 10px; margin-top: 16px; padding: 12px 14px; border-radius: 14px;
+  background: rgba(255,255,255,0.03); border: 1px solid var(--stroke); color: var(--text-dim); font-size: 13px; line-height: 1.5; }
+.about-privacy .ic { flex: none; margin-top: 2px; color: var(--good); }
+:root[data-theme="light"] .about-privacy { background: rgba(0,0,0,0.03); }
