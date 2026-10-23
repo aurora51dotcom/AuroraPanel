@@ -179,7 +179,8 @@ if [ $UNINSTALL = 1 ]; then
   # that happens to share the folder.
   say "Removing the program files"
   for f in backend frontend deploy .venv install.sh run.sh run.bat requirements.txt README.md LICENSE \
-           .gitattributes .gitignore .git aurora_config.json aurora_config.tmp; do
+           .gitattributes .gitignore .git aurora_config.json aurora_config.tmp \
+           tests requirements-dev.txt pytest.ini .coveragerc .github htmlcov .coverage .pytest_cache; do
     rm -rf "${APP_DIR:?}/$f"
   done
   if rmdir "$APP_DIR" 2>/dev/null; then
