@@ -7247,13 +7247,14 @@
       const [kl, kc, kd] = KIND_LABEL[a.kind];
       const mine = appMine(st, a.id).length;
       return el("div", { class: `ax-card${a.kind === "unavailable" ? " off" : ""}`, style: `--c:${a.color || "#ff7a1a"}` }, [
-        el("div", { class: "ax-card-top" }, [appTile(a), el("div", { class: "ax-card-name" }, [el("b", { text: a.name }), el("span", { class: `pill ${kc}`, title: kd || a.why || "", text: kl })])]),
+        el("div", { class: "ax-card-top" }, [el("div", { class: "ax-tile-wrap" }, [appTile(a),
+            mine ? el("button", { type: "button", class: "ax-count", title: `${mine} installed — show them`, "aria-label": `${mine} installed`, text: String(mine), onclick: () => navigate("app", { arg: a.id }) }) : null]),
+          el("div", { class: "ax-card-name" }, [el("b", { text: a.name }), el("span", { class: `pill ${kc}`, title: kd || a.why || "", text: kl })])]),
         el("p", { text: a.tagline }),
         el("div", { class: "ax-card-btns" }, [
           a.kind === "unavailable" ? el("span", { class: "muted ax-why", text: a.why }) :
             el("button", { class: "btn btn-sm btn-primary", onclick: (e) => { e.stopPropagation(); openAppWizard(a, () => draw()); } }, [icon("gear", 13), " Install"]),
           el("button", { class: "btn btn-sm btn-ghost", text: "Details", onclick: () => navigate("app", { arg: a.id }) }),
-          mine ? el("button", { class: "ax-mine", title: "Show your installs", text: `✓ ${mine} installed`, onclick: () => navigate("app", { arg: a.id }) }) : null,
         ]),
       ]);
     }

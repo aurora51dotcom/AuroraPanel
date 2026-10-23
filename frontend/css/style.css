@@ -1243,10 +1243,10 @@ pre.log { background: rgba(0,0,0,0.35); border: 1px solid var(--stroke); border-
 .ax-cat.active b { background: var(--accent); color: #1a0d05; }
 .ax-h { display: flex; align-items: center; gap: 6px; margin: 4px 0 12px; font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: var(--text-dim); }
 .ax-main .ax-grid + .ax-h { margin-top: 26px; }
-.ax-grid.top { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.ax-grid.top { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
 .ax-shelves { columns: 2 520px; column-gap: 22px; margin-top: 26px; }
 .ax-shelf { break-inside: avoid; margin-bottom: 26px; display: block; }
-.ax-shelf .ax-grid.fit { grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); }
+.ax-shelf .ax-grid.fit { grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
 .ax-shelf-h { border: none; background: none; padding: 0; cursor: pointer; font-weight: 700; font-family: inherit; }
 .ax-shelf-h:hover { color: var(--accent); }
 .ax-shelf-n { margin-left: 6px; font-size: 11px; color: var(--text-faint); background: rgba(255,255,255,0.06); padding: 1px 7px; border-radius: 999px; letter-spacing: 0; }
@@ -1383,3 +1383,7 @@ pre.log { background: rgba(0,0,0,0.35); border: 1px solid var(--stroke); border-
 .ax-wiz.nudge { animation: axNudge .35s ease; }
 @keyframes axNudge { 30% { transform: scale(1.015); } 60% { transform: scale(.995); } }
 @media (prefers-reduced-motion: reduce) { .ax-wiz.nudge { animation: none; } }
+.ax-tile-wrap { position: relative; flex: none; }
+.ax-count { position: absolute; top: -7px; right: -7px; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 999px; border: 2px solid var(--glass-solid);
+  background: var(--good); color: #062014; font-size: 11px; font-weight: 800; line-height: 16px; cursor: pointer; box-shadow: 0 4px 10px -4px rgba(63,208,143,0.8); }
+.ax-count:hover { transform: scale(1.1); }
