@@ -90,6 +90,9 @@ if [ $UNINSTALL = 1 ]; then
       echo
       warn "Folders protected with Directory Privacy will no longer ask for a password."
     fi
+    if grep -qs '^Alias ' /etc/apache2/conf-available/zz-aurora-folders.conf; then
+      warn "Folder sites linked in from outside the default web folder will stop answering (their files are kept)."
+    fi
     echo
     [ -t 0 ] || die "Re-run with --yes to uninstall without a prompt."
     read -r -p "  Type 'yes' to uninstall: " ANSWER
@@ -145,7 +148,7 @@ if [ $UNINSTALL = 1 ]; then
 
   if [ -d /etc/apache2 ]; then
     APACHE_CHANGED=0
-    for c in zz-aurora-tuning zz-aurora-privacy zz-aurora-webdisk zz-aurora-phppgadmin; do
+    for c in zz-aurora-tuning zz-aurora-privacy zz-aurora-webdisk zz-aurora-phppgadmin zz-aurora-folders; do
       if [ -e "/etc/apache2/conf-available/$c.conf" ] || [ -L "/etc/apache2/conf-enabled/$c.conf" ]; then
         rm -f "/etc/apache2/conf-enabled/$c.conf" "/etc/apache2/conf-available/$c.conf"
         APACHE_CHANGED=1

@@ -23,7 +23,7 @@ or the [Raspberry Pi Forums thread](https://forums.raspberrypi.com/viewtopic.php
 | **System** | Live dashboard (CPU, per-core load, temperature, throttling, memory, disks, uptime), `systemd` services, processes, `apt` packages, `ufw` firewall (with lock-out protection), Linux users. |
 | **Network** | VPN servers — **WireGuard** (QR codes), **OpenVPN** (per-user logins: certificate + password, password only or certificate only) and **IPsec/IKEv2** (native on iPhone/Mac/Windows) — each with an end-to-end self-test. Dynamic DNS (DuckDNS, No-IP, Dynu, deSEC, Cloudflare, FreeDNS, custom). Port Checker (outside probe, double-NAT/CGNAT detection, router instructions, UPnP). Network Monitor (who tried to connect). IP Blocker & Trust (ban IPs/ranges with expiry, trusted list). Fail2ban. Interfaces & Wi-Fi with confirm-or-revert. |
 | **Databases** | MariaDB and PostgreSQL databases and users, wizards, phpMyAdmin link. |
-| **Domains** | Apache virtual hosts (Force HTTPS, Let's Encrypt), redirects, BIND zone editor. |
+| **Domains** | Apache virtual hosts (Force HTTPS, Let's Encrypt), folder sites at `http://<pi-ip>/<name>` (no domain needed), redirects, BIND zone editor. |
 | **Security** | fail2ban jails (SSH, panel, OpenVPN, FTP, Apache, Nginx, MariaDB, port scans, repeat offenders), SSH keys, SSL/TLS, ModSecurity, hotlink protection, API tokens, TOTP two-factor login, panel HTTPS. |
 | **Files** | File manager (upload, edit, zip, recycle bin), Images (thumbnails, resize, WebP), Directory Privacy (password-protected folders), Disk & Inodes usage, Web Disk (WebDAV), FTP accounts (locked to a folder; full / read-only / upload-only), Backup + Backup Wizard (files and databases, selective restore), Git Version Control (clone, pull, deploy, deploy keys). |
 | **Advanced** | Browser terminal, cron wizard, `.htaccess` tools, ClamAV virus scanner, DNS tracing. |
@@ -102,7 +102,8 @@ to re-run first-time setup.
   changing the password or turning on 2FA signs out every other session.
 - A strict Content-Security-Policy is sent with every page, and untrusted text
   (log lines, usernames from failed logins) is only ever rendered as text.
-- The file manager is confined to `AURORA_FILE_ROOT` and rejects `..`/symlink
+- The file manager opens in the web folder and is confined to `/var/www`, website folders and your
+  home (or to `AURORA_FILE_ROOT` when set); it rejects `..`/symlink
   escapes; service names are validated before being passed to `systemctl`.
 - Sessions are HttpOnly, SameSite=strict cookies signed with a per-install
   secret that rotates whenever the password changes.

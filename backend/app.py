@@ -1498,6 +1498,26 @@ def api_site_remove(body: DomainNameBody, user: str = auth.CurrentUser):
     return _site_call(sites.remove_site, body.server_name)
 
 
+class FolderSiteBody(BaseModel):
+    name: str
+    path: str = ""
+
+
+@app.get("/api/sites/folders")
+def api_folder_sites(user: str = auth.CurrentUser):
+    return sites.list_folder_sites()
+
+
+@app.post("/api/sites/folders/create")
+def api_folder_site_create(body: FolderSiteBody, user: str = auth.CurrentUser):
+    return _site_call(sites.create_folder_site, body.name, body.path)
+
+
+@app.post("/api/sites/folders/remove")
+def api_folder_site_remove(body: FolderSiteBody, user: str = auth.CurrentUser):
+    return _site_call(sites.remove_folder_site, body.name)
+
+
 @app.post("/api/sites/certbot/install")
 def api_certbot_install(user: str = auth.CurrentUser):
     return {"job": sites.certbot_install().id}

@@ -254,7 +254,8 @@ def _clean(settings: dict) -> dict:
     if s["ssl"] == "none" and (s["force_https"] or s["hsts"]):
         raise SiteError("Force HTTPS / HSTS need an SSL certificate — pick one under HTTPS first")
     if s["ssl"] == "letsencrypt" and not (LE_LIVE / s["server_name"] / "fullchain.pem").exists():
-        raise SiteError("No Let's Encrypt certificate yet — use “Issue certificate” first")
+        raise SiteError("No Let's Encrypt certificate yet — click “Issue / renew certificate” under HTTPS; "
+                        "the site switches to it by itself once it's issued")
     if s["ssl"] == "custom":
         for k in ("cert", "key"):
             p = (s[k] or "").strip()
@@ -600,3 +601,131 @@ def issue_letsencrypt(name: str, email: str, include_aliases: bool = True) -> jo
     for n in names:
         argv += ["-d", n]
     return jobs.launch(f"Let's Encrypt: {s['server_name']}", argv)
+
+
+# --------------------------------------------------------------------------- #
+# Folder sites: http(s)://<this Pi>/<name>
+# --------------------------------------------------------------------------- #
+# One panel-owned conf holds every folder site. A folder inside the default
+# site's document root is served by that site already, so it only gets a
+# <Directory> block (.htaccess on); a folder anywhere else also needs an Alias,
+# which Apache applies on every site this Pi hosts.
+FOLDER_CONF = APACHE / "conf-available" / "zz-aurora-folders.conf"
+FOLDER_MARK = "# aurora-folders:"
+_FOLDER_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,62}$")
+_RESERVED = {"phpmyadmin", "phppgadmin", "webdisk", "icons", "server-status", "server-info", "cgi-bin", "javascript", "manual", ".well-known"}
+
+
+def default_docroot() -> Path:
+    """DocumentRoot of the stock :80 site (000-default), which answers on the Pi's IP."""
+    conf = AVAIL / "000-default.conf"
+    try:
+        for b in _blocks(_live_conf(conf).read_text(errors="replace")):
+            if b["docroot"]:
+                return Path(b["docroot"])
+    except OSError:
+        pass
+    return DEFAULT_DOCROOT_BASE / "html"
+
+
+def _folder_state() -> list[dict]:
+    try:
+        first = FOLDER_CONF.read_text(errors="replace").splitlines()[0]
+        if first.startswith(FOLDER_MARK):
+            return json.loads(first[len(FOLDER_MARK):])
+    except (OSError, IndexError, ValueError):
+        pass
+    return []
+
+
+def _folder_render(items: list[dict]) -> str:
+    out = [FOLDER_MARK + " " + json.dumps(items), "# Written by AuroraPanel (Domains → Folder sites). Edit them in the panel.", ""]
+    for it in items:
+        out.append(f"# /{it['name']}")
+        if it["alias"]:
+            out.append(f'Alias "/{it["name"]}" "{it["path"]}"')
+        out += [f'<Directory "{it["path"]}">', "    Options -Indexes +FollowSymLinks", "    AllowOverride All",
+                "    Require all granted", "</Directory>", ""]
+    return "\n".join(out)
+
+
+def _folder_apply(items: list[dict]) -> None:
+    """Write the conf, keep it only if apache2ctl accepts it, then reload."""
+    old = FOLDER_CONF.read_text(errors="replace") if FOLDER_CONF.exists() else None
+    was_on = (APACHE / "conf-enabled" / FOLDER_CONF.name).exists()
+    FOLDER_CONF.write_text(_folder_render(items), encoding="utf-8")
+    if not was_on:
+        _run(["a2enconf", "-q", FOLDER_CONF.stem])
+    test = _run(["apache2ctl", "configtest"])
+    if test.returncode != 0:
+        if old is None:
+            _run(["a2disconf", "-q", FOLDER_CONF.stem])
+            FOLDER_CONF.unlink(missing_ok=True)
+        else:
+            FOLDER_CONF.write_text(old, encoding="utf-8")
+            if not was_on:
+                _run(["a2disconf", "-q", FOLDER_CONF.stem])
+        err = "\n".join(l for l in (test.stderr + test.stdout).splitlines() if "AH00558" not in l).strip()
+        raise SiteError("Apache rejected the config, nothing was changed:\n" + err[:1500])
+    if _run(["systemctl", "reload", "apache2"]).returncode != 0:
+        _run(["systemctl", "restart", "apache2"])
+
+
+def list_folder_sites() -> dict:
+    if not (IS_LINUX and AVAIL.exists()):
+        return {"supported": False, "sites": [], "base": ""}
+    items = _folder_state()
+    for it in items:
+        it["exists"] = Path(it["path"]).is_dir()
+    return {"supported": True, "sites": items, "base": str(default_docroot())}
+
+
+def create_folder_site(name: str, path: str = "") -> dict:
+    _require()
+    name = (name or "").strip().strip("/").lower()
+    if not _FOLDER_NAME.match(name) or name in _RESERVED:
+        raise SiteError("Use a short name of letters, numbers, dots, dashes or underscores, e.g. mysite")
+    base = default_docroot()
+    path = (path or "").strip().rstrip("/") or str(base / name)
+    if not path.startswith("/") or ".." in path.split("/") or any(c in path for c in "\n\"'<>$`\\"):
+        raise SiteError("The folder must be an absolute path, e.g. /var/www/html/" + name)
+    target = Path(path)
+    if len(target.parts) < 3 or str(target) in ("/etc", "/usr", "/var", "/root", "/home", "/var/lib", "/var/log"):
+        raise SiteError("Pick a folder of its own for the site, e.g. /var/www/" + name)
+    items = _folder_state()
+    if any(it["name"] == name for it in items):
+        raise SiteError(f"/{name} is already a folder site")
+    in_root = target.parent == base and target.name == name
+    if not in_root and (base / name).exists():
+        raise SiteError(f"{base / name} already exists, so /{name} is taken — pick another name")
+    if not target.exists():
+        target.mkdir(parents=True)
+        (target / "index.html").write_text(
+            f"<!doctype html><meta charset=utf-8><title>{name}</title>"
+            "<body style='font-family:system-ui;background:#0b0a0a;color:#f4efeb;display:grid;"
+            "place-items:center;height:100vh;margin:0'><div style='text-align:center'>"
+            f"<h1 style='color:#ff8a33'>/{name}</h1><p>New site created by AuroraPanel.</p></div>",
+            encoding="utf-8")
+        _run(["chown", "-R", "www-data:www-data", str(target)])
+    elif not target.is_dir():
+        raise SiteError(f"{target} exists and isn't a folder")
+    items.append({"name": name, "path": str(target), "alias": not in_root, "created": int(time.time())})
+    _folder_apply(items)
+    return {"ok": True, "name": name, "path": str(target), "alias": not in_root}
+
+
+def remove_folder_site(name: str) -> dict:
+    """Stops serving /<name> through the panel's conf; the folder and its files are kept."""
+    _require()
+    items = _folder_state()
+    keep = [it for it in items if it["name"] != (name or "").strip().strip("/").lower()]
+    if len(keep) == len(items):
+        raise SiteError("No folder site with that name")
+    if keep:
+        _folder_apply(keep)
+    else:
+        _run(["a2disconf", "-q", FOLDER_CONF.stem])
+        FOLDER_CONF.unlink(missing_ok=True)
+        if _run(["systemctl", "reload", "apache2"]).returncode != 0:
+            _run(["systemctl", "restart", "apache2"])
+    return {"ok": True}

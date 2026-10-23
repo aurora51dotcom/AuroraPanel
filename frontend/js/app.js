@@ -1241,6 +1241,11 @@
   // ======================================================================
   function viewFiles(root) {
     const crumb = el("div", { class: "breadcrumb", id: "fm-crumb" });
+    const pathIn = el("input", { type: "text", id: "fm-path", class: "cw-mono", placeholder: "/var/www/html", autocomplete: "off", spellcheck: "false",
+      onkeydown: (e) => { if (e.key === "Enter") { e.preventDefault(); fmGo(); } } });
+    const fmGo = () => { const p = pathIn.value.trim(); if (p) fmLoad(p); };
+    const pathBar = el("div", { class: "fm-pathbar" }, [
+      pathIn, el("button", { class: "btn btn-sm", text: "Go", onclick: fmGo }), el("div", { class: "fm-roots", id: "fm-roots" })]);
     const bar = el("div", { class: "fm-toolbar" }, [
       el("button", { class: "btn btn-sm", text: "↑ Up", id: "fm-up" }),
       el("button", { class: "btn btn-sm", text: "＋ New folder", onclick: fmNewFolder }),
@@ -1260,7 +1265,7 @@
       body,
       el("div", { class: "fm-drop-overlay", text: "⬇ Drop files here to upload" }),
     ]);
-    root.append(bar, crumb, zone);
+    root.append(pathBar, bar, crumb, zone);
 
     // Drag-and-drop upload.
     let dragDepth = 0;
@@ -1282,11 +1287,30 @@
 
   async function fmLoad(path) {
     await guardedLoad(async () => {
-      const data = await API.filesList(path);
+      let data;
+      try { data = await API.filesList(path); }
+      catch (err) {
+        if (err.status === 401) throw err;
+        toast(err.message, "bad");
+        if ($("#fm-path")) $("#fm-path").value = fmState.cwd;
+        if (!$("#fm-body table") && path) return fmLoad("");  // first load of a folder that's gone
+        return;
+      }
       fmState.cwd = data.cwd;
       fmState.parent = data.parent;
       fmState.selected = new Set();
-      $("#fm-crumb").innerHTML = `<span class="muted">${esc(data.root)}</span> / <b>${esc(data.cwd || "")}</b>`;
+      $("#fm-path").value = data.cwd;
+      // Each segment is clickable; the ones outside the allowed folders are plain text.
+      const crumbs = $("#fm-crumb"); crumbs.innerHTML = "";
+      const parts = data.cwd.split("/").filter(Boolean);
+      parts.forEach((p, i) => {
+        const full = "/" + parts.slice(0, i + 1).join("/");
+        const open = (data.roots || []).some((r) => full === r || full.startsWith(r + "/"));
+        crumbs.append(el("span", { class: "muted", text: "/" }),
+          i === parts.length - 1 ? el("b", { text: p }) : open ? el("a", { href: "#", text: p, onclick: (e) => { e.preventDefault(); fmLoad(full); } }) : el("span", { class: "muted", text: p }));
+      });
+      const roots = $("#fm-roots"); roots.innerHTML = "";
+      (data.roots || []).forEach((r) => roots.append(el("button", { class: `btn btn-sm btn-ghost${data.cwd === r ? " active" : ""}`, text: r, title: `Open ${r}`, onclick: () => fmLoad(r) })));
       $("#fm-up").disabled = data.parent == null;
       const body = $("#fm-body");
       body.innerHTML = "";
@@ -4040,13 +4064,54 @@
         ]);
       });
       body.append(el("div", { class: "dm-count muted", text: `Displaying ${list.length} of ${data.sites.length} domain${data.sites.length === 1 ? "" : "s"}` }));
-      if (!list.length) { body.append(el("div", { class: "cw-empty" }, [icon("globe", 28), el("b", { text: q ? "No matches" : "No domains yet" }), el("span", { class: "muted", text: "Create one to get a site running on this Pi." })])); return; }
-      body.append(el("div", { class: "table-wrap" }, el("table", { class: "dm-table" }, [
+      if (!list.length) body.append(el("div", { class: "cw-empty" }, [icon("globe", 28), el("b", { text: q ? "No matches" : "No domains yet" }), el("span", { class: "muted", text: "Create one to get a site running on this Pi." })]));
+      else body.append(el("div", { class: "table-wrap" }, el("table", { class: "dm-table" }, [
         el("thead", {}, el("tr", {}, [el("th", {}, all), ...["Domain", "Document Root", "Redirects To", "Force HTTPS", "SSL", "Actions"].map((h) => el("th", { text: h }))])),
         el("tbody", {}, rows),
       ])));
+      body.append(folderSection(q));
     }
-    const load = async () => { await guardedLoad(async () => { data = await API.sites(); render(); }); };
+
+    // Sites served from a folder on this Pi's own address: http(s)://<ip>/<name>.
+    function folderSection(q) {
+      const host = location.hostname;
+      const items = (folders.sites || []).filter((f) => !q || f.name.includes(q) || f.path.toLowerCase().includes(q));
+      const box = el("div", { class: "dm-folders" }, [el("div", { class: "dm-folders-h" }, [
+        icon("folder", 16), el("h3", { text: "Folder sites" }),
+        el("span", { class: "muted", style: "font-size:13px", text: `http(s)://${host}/name — no domain needed` }),
+        el("span", { class: "grow" }),
+        el("button", { class: "btn btn-sm", onclick: () => createDomainModal("folder") }, [icon("folder", 13), " New folder site"])])]);
+      if (!items.length) {
+        box.append(el("p", { class: "muted", text: q ? "No folder sites match." : `None yet. A folder site lives at http://${host}/<name>/, in ${folders.base || "/var/www/html"}/<name> or any folder you pick.` }));
+        return box;
+      }
+      box.append(el("div", { class: "table-wrap" }, el("table", { class: "dm-table" }, [
+        el("thead", {}, el("tr", {}, ["Address", "Folder", ""].map((h) => el("th", { text: h })))),
+        el("tbody", {}, items.map((f) => el("tr", { class: f.exists ? "" : "dm-off" }, [
+          el("td", {}, el("div", { class: "dm-name" }, [
+            el("a", { href: `http://${host}/${f.name}/`, target: "_blank", rel: "noopener", title: "Open site" }, [icon("link", 13), ` ${host}/${f.name}/`]),
+            el("span", { class: "dm-tags" }, [
+              f.alias ? el("span", { class: "pill dim", title: "Outside the default site's folder — served through an Apache Alias", text: "alias" }) : null,
+              f.exists ? null : el("span", { class: "pill warn", text: "folder missing" })]),
+          ])),
+          el("td", {}, el("span", { class: "dm-root" }, [icon("home", 13), " ", f.path])),
+          el("td", { class: "actions" }, [
+            el("button", { class: "btn btn-sm", onclick: () => { fmState.cwd = f.path; navigate("files"); } }, [icon("folder", 13), " Files"]),
+            el("button", { class: "btn btn-sm btn-ghost", title: "Stop serving it through the panel (files are kept)", onclick: async () => {
+              const keepNote = f.alias ? "It stops answering at /" + f.name + "." : `Its folder is inside ${folders.base}, so it keeps answering at /${f.name} until you delete the folder in the File Manager.`;
+              if (!confirmInline(`Remove the folder site /${f.name}?\n\nThe files in ${f.path} are kept. ${keepNote}`)) return;
+              try { await API.folderSiteRemove(f.name); toast(`Removed /${f.name}`, "good"); load(); } catch (e) { toast(e.message, "bad"); }
+            } }, icon("error", 13)),
+          ]),
+        ]))),
+      ])));
+      return box;
+    }
+    let folders = { sites: [] };
+    const load = async () => { await guardedLoad(async () => {
+      [data, folders] = await Promise.all([API.sites(), API.folderSites().catch(() => ({ sites: [] }))]);
+      render();
+    }); };
     search.addEventListener("input", render);
     applyBtn.addEventListener("click", async () => {
       if (!bulk.value) return toast("Pick a bulk action", "bad");
@@ -4064,16 +4129,39 @@
     state.refreshHandler = load; load();
   }
 
-  function createDomainModal() {
+  function createDomainModal(mode) {
     const f = el("div", { class: "dm-form" });
-    f.innerHTML = `
+    // Two kinds: a domain/IP of its own, or a folder at http(s)://<this Pi>/<name>.
+    const kind = el("div", { class: "cw-seg cw-seg-sm", style: "margin-bottom:14px" });
+    const domainBox = el("div", {}), folderBox = el("div", { hidden: true });
+    const setKind = (k) => {
+      kind.querySelectorAll("button").forEach((b) => b.classList.toggle("active", b.dataset.k === k));
+      domainBox.hidden = k !== "domain"; folderBox.hidden = k !== "folder";
+      go.textContent = k === "folder" ? "Create folder site" : "Create domain";
+      setTimeout(() => (k === "folder" ? fName : name).focus(), 30);
+    };
+    kind.append(
+      el("button", { type: "button", "data-k": "domain", text: "Domain or IP", onclick: () => setKind("domain") }),
+      el("button", { type: "button", "data-k": "folder", text: `Folder · ${location.hostname}/name`, onclick: () => setKind("folder") }));
+    folderBox.innerHTML = `
+      <label class="cw-lbl">Site name<div class="dm-prefix"><span>http(s)://${esc(location.hostname)}/</span><input id="nf-name" type="text" placeholder="mysite" autocomplete="off" /></div></label>
+      <label class="cw-lbl">Folder<input id="nf-path" type="text" class="cw-mono" placeholder="/var/www/html/mysite" autocomplete="off" spellcheck="false" /></label>
+      <p class="muted" style="font-size:12px;margin:4px 0 0">No domain needed: the site answers on this Pi's address, over http and (when the default HTTPS site is on) https. The folder is created with a starter <code>index.html</code>; <code>.htaccess</code> files work in it. A folder outside <code id="nf-base">/var/www/html</code> is linked in with an Apache Alias, so <code>/name</code> then also works on the other sites this Pi hosts.</p>`;
+    const fName = $("#nf-name", folderBox), fPath = $("#nf-path", folderBox);
+    let base = "/var/www/html", pathTouched = false;
+    API.folderSites().then((r) => { if (r.base) { base = r.base; $("#nf-base", folderBox).textContent = base; syncPath(); } }).catch(() => {});
+    const syncPath = () => { const n = fName.value.trim().toLowerCase() || "mysite"; fPath.placeholder = `${base}/${n}`; if (!pathTouched) fPath.value = fName.value.trim() ? `${base}/${n}` : ""; };
+    fName.addEventListener("input", syncPath);
+    fPath.addEventListener("input", () => { pathTouched = !!fPath.value.trim(); });
+    f.append(kind, domainBox, folderBox);
+    domainBox.innerHTML = `
       <label class="cw-lbl">Domain or IP address<input id="nd-name" type="text" placeholder="example.com or 192.168.0.100" autocomplete="off" /></label>
       <label class="cw-lbl">Document root<input id="nd-root" type="text" placeholder="/var/www/example.com" /></label>
       <label class="dm-check"><input id="nd-www" type="checkbox" checked /> Also answer on <b id="nd-www-l">www.example.com</b></label>
       <label class="dm-check"><input id="nd-ssl" type="checkbox" /> Create a self-signed certificate &amp; force HTTPS <span class="muted">(switch to Let's Encrypt later)</span></label>
       <label class="dm-check"><input id="nd-zone" type="checkbox" /> Create a DNS zone for it in the Zone Editor</label>
       <p class="muted" style="font-size:12px;margin:4px 0 0">Local names like <code>mysite.test</code> work too — you'll get the hosts-file line to add on your computer. No domain? Enter this Pi's IP to serve a folder at <code>http://&lt;ip&gt;/</code>.</p>`;
-    const name = $("#nd-name", f), rootIn = $("#nd-root", f);
+    const name = $("#nd-name", domainBox), rootIn = $("#nd-root", domainBox);
     name.addEventListener("input", () => {
       const n = name.value.trim().toLowerCase() || "example.com";
       rootIn.placeholder = `/var/www/${n}`;
@@ -4082,6 +4170,17 @@
       ["#nd-www", "#nd-zone"].forEach((id) => { const c = $(id, f); c.disabled = ip; if (ip) c.checked = false; c.parentElement.classList.toggle("dm-dim", ip); });
     });
     const go = el("button", { class: "btn btn-primary", text: "Create domain", onclick: async () => {
+      if (!folderBox.hidden) {
+        const n = fName.value.trim().toLowerCase().replace(/^\/+|\/+$/g, "");
+        if (!n) return toast("Enter a name for the site", "bad");
+        go.disabled = true;
+        try {
+          const r = await API.folderSiteCreate(n, fPath.value.trim());
+          closeModal(); toast(`Created http://${location.hostname}/${r.name}/ → ${r.path}`, "good");
+          state.refreshHandler && state.refreshHandler();
+        } catch (e) { toast(e.message, "bad"); go.disabled = false; }
+        return;
+      }
       const n = name.value.trim().toLowerCase();
       if (!n) return toast("Enter a domain", "bad");
       const ssl = $("#nd-ssl", f).checked;
@@ -4094,8 +4193,8 @@
         closeModal(); toast(`Created ${r.server_name}`, "good"); openDomain(r.server_name);
       } catch (e) { toast(e.message, "bad"); go.disabled = false; }
     } });
-    openModal("Create a new domain", f, [go]);
-    setTimeout(() => name.focus(), 30);
+    openModal("Create a new site", f, [go]);
+    setKind(mode === "folder" ? "folder" : "domain");
   }
 
   function viewDomainManage(root, name) {
@@ -4193,11 +4292,18 @@
               try { const r = await API.certbotInstall(); follow(r.job, "Installing certbot…", () => load()); } catch (e) { toast(e.message, "bad"); }
               return;
             }
-            if (JSON.stringify(s) !== orig) return toast("Save your other changes first", "bad");
+            // Picking "Let's Encrypt" (and its Force HTTPS / HSTS switches) is what this button saves
+            // once the certificate exists, so only other unsaved edits have to be saved first.
+            const others = JSON.stringify({ ...s, ssl: d.settings.ssl, force_https: d.settings.force_https, hsts: d.settings.hsts });
+            if (others !== orig) return toast("Save your other changes first", "bad");
             try { localStorage.setItem("aurora-le-email", email.value.trim()); } catch (e) {}
             try { const r = await API.siteLE(d.settings.server_name, email.value.trim(), withAliases.checked); follow(r.job, "Requesting certificate…", async (ok) => {
               if (!ok) return;
-              try { const cur = (await API.siteGet(name)).settings; cur.ssl = "letsencrypt"; await API.siteSave(name, cur); toast("Let's Encrypt certificate installed", "good"); } catch (e) { toast(e.message, "bad"); }
+              try {
+                const cur = (await API.siteGet(name)).settings;
+                Object.assign(cur, { ssl: "letsencrypt", force_https: s.force_https, hsts: s.hsts });
+                await API.siteSave(name, cur); toast("Let's Encrypt certificate installed", "good");
+              } catch (e) { toast(e.message, "bad"); }
               load();
             }); } catch (e) { toast(e.message, "bad"); }
           } }, [icon("lock", 13), d.certbot ? " Issue / renew certificate" : " Install certbot"]);

@@ -844,6 +844,12 @@ a.btn { text-decoration: none; }
 
 /* file manager */
 .fm-toolbar { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+.fm-pathbar { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+.fm-pathbar #fm-path { flex: 1 1 280px; min-width: 0; }
+.fm-roots { display: flex; gap: 6px; flex-wrap: wrap; }
+.fm-roots .btn.active { border-color: var(--accent); color: var(--accent); }
+.breadcrumb a { color: var(--accent); text-decoration: none; }
+.breadcrumb a:hover { text-decoration: underline; }
 .breadcrumb { color: var(--text-dim); font-size: 13px; word-break: break-all; margin-bottom: 12px; }
 .breadcrumb b { color: var(--text); }
 .fm-name { display: flex; align-items: center; gap: 9px; cursor: pointer; }
@@ -1100,3 +1106,11 @@ pre.log { background: rgba(0,0,0,0.35); border: 1px solid var(--stroke); border-
 .about-rel { border-top: 1px solid var(--stroke); padding: 12px 0 4px; }
 .about-rel h4 { margin: 0 0 6px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .about-rel-new h4 { color: var(--accent); }
+
+/* Folder sites (Domains) */
+.dm-prefix { display: flex; align-items: stretch; }
+.dm-prefix span { text-transform: none; letter-spacing: 0; font-weight: 500; display: flex; align-items: center; padding: 0 10px; border: 1px solid var(--stroke); border-right: none; border-radius: 12px 0 0 12px; color: var(--text-dim); font-size: 13px; white-space: nowrap; background: rgba(0,0,0,0.2); }
+.dm-prefix input { text-transform: none; letter-spacing: 0; border-radius: 0 12px 12px 0; min-width: 0; flex: 1; }
+.dm-folders { margin-top: 22px; }
+.dm-folders-h { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.dm-folders-h h3 { margin: 0; }

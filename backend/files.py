@@ -1,9 +1,11 @@
 """A sandboxed file manager.
 
-All operations are confined to a root directory: AURORA_FILE_ROOT if set,
-otherwise the web server's folder (e.g. /var/www/html) when one is installed,
-otherwise the default (non-root) user's home. Paths are resolved and checked so
-requests can never escape the root via '..' or symlinks.
+It opens in the web server's folder (e.g. /var/www/html) when one is installed,
+otherwise in the default (non-root) user's home. Any path can be typed in, but
+every operation is confined to the allowed folders: /var/www, each website's
+document root and that user's home — or only AURORA_FILE_ROOT when it is set.
+Paths in the API are absolute (relative ones start at the opening folder) and
+are resolved and checked, so '..' and symlinks can't escape the allowed folders.
 """
 from __future__ import annotations
 
@@ -52,11 +54,46 @@ def _default_user_home() -> Path:
 
 
 def file_root() -> Path:
+    """The folder the File Manager opens in."""
     env = os.environ.get("AURORA_FILE_ROOT")
     if env:
         return Path(env).resolve()
     web = sysapps.web_root()
     return Path(web).resolve() if web else _default_user_home().resolve()
+
+
+_roots_cache: tuple[float, list[Path]] = (0.0, [])
+
+
+def allowed_roots() -> list[Path]:
+    """Folders the File Manager may work in (see the module docstring)."""
+    global _roots_cache
+    if os.environ.get("AURORA_FILE_ROOT"):
+        return [FILE_ROOT]
+    if time.time() - _roots_cache[0] < 10:
+        return _roots_cache[1]
+    roots = [FILE_ROOT, _default_user_home().resolve()]
+    if Path("/var/www").is_dir():
+        roots.append(Path("/var/www").resolve())
+    try:
+        from . import sites
+        for s in sites.list_sites().get("sites", []):
+            if s.get("docroot") and Path(s["docroot"]).is_dir():
+                roots.append(Path(s["docroot"]).resolve())
+    except Exception:  # noqa: BLE001 — Apache missing or a conf it can't read: just fewer roots
+        pass
+    # Drop any root already inside another one; the system root is never one.
+    out = []
+    for r in sorted(set(roots), key=lambda p: len(p.parts)):
+        if len(r.parts) > 1 and not any(r == o or o in r.parents for o in out):
+            out.append(r)
+    out.sort(key=lambda p: (not str(p).startswith("/var/www"), str(p)))
+    _roots_cache = (time.time(), out)
+    return out
+
+
+def _allowed(p: Path) -> bool:
+    return any(p == r or r in p.parents for r in allowed_roots())
 
 
 def _trash_dir(root: Path) -> Path:
@@ -82,22 +119,19 @@ def _is_hidden(name: str) -> bool:
     return name.startswith(".")
 
 
-def _resolve(rel_path: str) -> Path:
-    """Resolve a client-supplied relative path safely inside FILE_ROOT."""
+def _resolve(path: str) -> Path:
+    """Resolve a client-supplied path (absolute, or relative to FILE_ROOT) inside the allowed folders."""
     _refresh_root()
-    rel = (rel_path or "").lstrip("/\\")
-    candidate = (FILE_ROOT / rel).resolve()
-    # Confinement check: candidate must be FILE_ROOT or a descendant.
-    if candidate != FILE_ROOT and FILE_ROOT not in candidate.parents:
-        raise FileError("Path escapes the allowed root")
+    p = (path or "").strip()
+    candidate = Path(p).resolve() if p.startswith("/") else (FILE_ROOT / p.lstrip("\\")).resolve()
+    if not _allowed(candidate):
+        raise FileError("The File Manager can only open " + ", ".join(_rel(r) for r in allowed_roots()) + " and folders inside them")
     return candidate
 
 
 def _rel(p: Path) -> str:
-    try:
-        return str(p.relative_to(FILE_ROOT)).replace("\\", "/")
-    except ValueError:
-        return ""
+    """Paths as the API shows them: absolute."""
+    return str(p).replace("\\", "/")
 
 
 def list_dir(rel_path: str) -> dict:
@@ -111,7 +145,7 @@ def list_dir(rel_path: str) -> dict:
     with os.scandir(target) as it:
         for entry in it:
             # Never show the recycle bin as a normal folder.
-            if target == FILE_ROOT and entry.name == TRASH_DIR.name:
+            if target == TRASH_DIR.parent and entry.name == TRASH_DIR.name:
                 continue
             try:
                 st = entry.stat(follow_symlinks=False)
@@ -133,9 +167,10 @@ def list_dir(rel_path: str) -> dict:
 
     entries.sort(key=lambda e: (not e["is_dir"], e["name"].lower()))
     return {
-        "root": str(FILE_ROOT),
+        "root": _rel(FILE_ROOT),
+        "roots": [_rel(r) for r in allowed_roots()],
         "cwd": _rel(target),
-        "parent": _rel(target.parent) if target != FILE_ROOT else None,
+        "parent": _rel(target.parent) if _allowed(target.parent) else None,
         "entries": entries,
     }
 
@@ -163,8 +198,8 @@ def write_text(rel_path: str, content: str) -> dict:
 
 def delete(rel_path: str, permanent: bool = False) -> dict:
     target = _resolve(rel_path)
-    if target == FILE_ROOT:
-        raise FileError("Refusing to delete the root")
+    if target == FILE_ROOT or target in allowed_roots():
+        raise FileError(f"Refusing to delete {_rel(target)} — it's one of the File Manager's main folders")
     if target == TRASH_DIR:
         raise FileError("Refusing to delete the recycle bin")
     if not target.exists() and not target.is_symlink():
