@@ -89,8 +89,11 @@ def _guess_parent(top: str) -> str | None:
     """Where a folder archive made elsewhere (or before we kept notes) most likely came from."""
     from . import files
     for c in (str(files._default_user_home()), "/home", "/var/www", "/var/www/html", "/srv", "/opt", "/root", "/etc", "/usr/local"):
-        if top and Path(c, top).exists():
-            return c
+        try:
+            if top and Path(c, top).exists():
+                return c
+        except OSError:  # e.g. /root when not running as root
+            continue
     return None
 
 
