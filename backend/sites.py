@@ -192,7 +192,27 @@ def list_sites() -> dict:
             "cert_expires": cert.get("expires") if cert else None,
             "cert_self_signed": cert.get("self_signed") if cert else None,
         })
+    # The http built-in site gets its https from default-ssl: show that on its row.
+    https = next((x for x in sites if x["conf"] == "default-ssl.conf" and x["enabled"]), None)
+    for x in sites:
+        if x["system"] and x["has_http"] and https:
+            x["https_via"] = {"ssl": https["ssl"], "cert_expires": https["cert_expires"]}
     return {"supported": True, "sites": sites, "certbot": bool(shutil.which("certbot"))}
+
+
+def _builtin_https() -> dict | None:
+    """The built-in https site (default-ssl) — it serves https for the http built-in site's address."""
+    conf = AVAIL / "default-ssl.conf"
+    if not conf.is_file():
+        return None
+    try:
+        s = _settings_from_conf(_live_conf(conf))
+    except (SiteError, OSError):
+        return None
+    enabled = (ENABLED / conf.name).exists()
+    ssl = s["ssl"] if enabled else "none"
+    return {"conf": conf.name, "enabled": enabled, "ssl": ssl, "cert": s["cert"], "key": s["key"], "chain": s["chain"],
+            "cert_info": _cert_info(s) if ssl != "none" else None}
 
 
 def get_site(name: str) -> dict:
@@ -204,9 +224,10 @@ def get_site(name: str) -> dict:
     src = _live_conf(conf) if system else conf
     s = _settings_from_conf(src)
     cert = _cert_info(s) if s["ssl"] != "none" else None
+    has_http = _has_http(conf) if system else True
     return {"settings": {k: v for k, v in s.items() if not k.startswith("_")}, "managed": s["_managed"],
             "conf": conf.name, "system": system, "enabled": (ENABLED / conf.name).exists(),
-            "has_http": _has_http(conf) if system else True,
+            "has_http": has_http, "https": _builtin_https() if system and has_http else None,
             "cert": cert, "certbot": bool(shutil.which("certbot")),
             "le_available": (LE_LIVE / s["server_name"] / "fullchain.pem").exists(),
             "config_text": src.read_text(errors="replace")[:30000]}
@@ -585,8 +606,10 @@ def set_system_ssl(conf_name: str, mode: str, cert: str = "", key: str = "", cha
     conf = AVAIL / conf_name
     if conf_name not in SYSTEM_CONFS or not conf.is_file():
         raise SiteError("Only Apache's built-in https site is changed here — use Manage → Save for other sites")
-    if _has_http(conf):
-        raise SiteError(f"{conf_name} is the http site; its certificate is set on the https (port 443) site")
+    if _has_http(conf):  # the http built-in site's https is served by default-ssl
+        if not (AVAIL / "default-ssl.conf").is_file():
+            raise SiteError("Apache's built-in https site (default-ssl.conf) is missing, so there's nothing to put a certificate on")
+        conf_name, conf = "default-ssl.conf", AVAIL / "default-ssl.conf"
     if mode == "none":
         return _set_system_enabled(conf, False)
     live = _live_conf(conf)
@@ -652,6 +675,36 @@ def _local_ip() -> str:
             return so.getsockname()[0]
     except OSError:
         return "127.0.0.1"
+
+
+def save_conf_text(name: str, text: str) -> dict:
+    """Replace a site's whole config file (the one Apache loads) — backed up, checked, rolled back if rejected."""
+    _require()
+    conf = _conf_for(name)
+    if not conf:
+        raise SiteError("No site found with that name")
+    text = (text or "").replace("\r\n", "\n")
+    if len(text) > 200_000:
+        raise SiteError("Config file too large (200 KB max)")
+    if not re.search(r"(?i)<VirtualHost\s", text):
+        raise SiteError("The file needs at least one <VirtualHost> block")
+    live = _live_conf(conf) if conf.name in SYSTEM_CONFS else conf
+    old = live.read_text(errors="replace")
+    if text.rstrip("\n") == old.rstrip("\n"):
+        return {"ok": True}
+    SITE_BAK.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(live, SITE_BAK / f"{conf.name}.{int(time.time())}")
+    live.write_text(text if text.endswith("\n") else text + "\n", encoding="utf-8")
+    test = _run(["apache2ctl", "configtest"])
+    if test.returncode != 0:
+        live.write_text(old, encoding="utf-8")
+        err = "\n".join(l for l in (test.stderr + test.stdout).splitlines() if "AH00558" not in l).strip()
+        raise SiteError("Apache rejected the file, nothing was changed:\n" + err[:1500])
+    if (ENABLED / conf.name).exists():
+        r = _run(["systemctl", "reload", "apache2"])
+        if r.returncode != 0:
+            _run(["systemctl", "restart", "apache2"])
+    return {"ok": True, "backup": str(SITE_BAK)}
 
 
 def set_system_custom(conf_name: str, custom: str) -> dict:

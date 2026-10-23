@@ -1506,6 +1506,16 @@ def api_site_system_ssl(body: SystemSslBody, user: str = auth.CurrentUser):
     return _site_call(sites.set_system_ssl, body.conf, body.ssl, body.cert, body.key, body.chain)
 
 
+class SiteConfBody(BaseModel):
+    name: str
+    text: str
+
+
+@app.post("/api/sites/conf")
+def api_site_conf(body: SiteConfBody, user: str = auth.CurrentUser):
+    return _site_call(sites.save_conf_text, body.name, body.text)
+
+
 class SystemCustomBody(BaseModel):
     conf: str
     custom: str = ""
