@@ -12,9 +12,9 @@ import re
 import urllib.error
 import urllib.request
 
-VERSION = "1.0.8-beta"
-LABEL = "Beta v1.0.8"
-RELEASED = "2026-10-22"
+VERSION = "1.0.9-beta"
+LABEL = "Beta v1.0.9"
+RELEASED = "2026-10-23"
 VERSION_URL = "https://aurora51.com/version.json"
 CHANGELOG_URL = "https://aurora51.com/changelog.json"
 SITE = "https://aurora51.com"
