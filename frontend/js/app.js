@@ -61,6 +61,7 @@
   //  SVG line icons (Lucide-style)
   // ======================================================================
   const ICONS = {
+    metrics: '<path d="M3 21h18"/><rect x="4.5" y="15" width="3" height="6" rx="1"/><rect x="10.5" y="12" width="3" height="9" rx="1"/><rect x="16.5" y="13.5" width="3" height="7.5" rx="1"/><polyline points="4 10 9 6 13 8.5 20 3"/><polyline points="16 3 20 3 20 7"/>',
     chart: '<path d="M3 3v18h18"/><polyline points="7 15 11 10 14 13 20 6"/>',
     check: '<polyline points="20 6 9 17 4 12"/>',
     clock: '<circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/>',
@@ -227,7 +228,7 @@
   // ======================================================================
   const GROUP_ICONS = {
     System: "processes", Network: "network", Applications: "apps", Databases: "database", Domains: "globe", Email: "mail", Security: "shield",
-    Files: "folder", Advanced: "terminal", Software: "packages", Preferences: "gear",
+    Metrics: "metrics", Files: "folder", Advanced: "terminal", Software: "packages", Preferences: "gear",
   };
   let NAV_GROUPS = [];
   function buildNavGroups() {
@@ -875,7 +876,7 @@
       { label: "Git Version Control", icon: "git", view: "git" },
       { label: "Inodes Usage", icon: "indexes", view: "inodes" },
     ]},
-    { name: "Metrics", icon: "processes", tiles: [
+    { name: "Metrics", icon: "metrics", tiles: [
       { label: "Visitors", icon: "visitors", view: "visitors" },
       { label: "Errors", icon: "errors", view: "errors" },
       { label: "Bandwidth", icon: "gauge", view: "bandwidth" },
