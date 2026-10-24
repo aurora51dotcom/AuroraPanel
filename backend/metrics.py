@@ -86,7 +86,7 @@ def parse_access(line: str, vhost_fmt: bool = False) -> dict | None:
 
 _BOT = re.compile(r"bot\b|bot/|crawl|spider|slurp|curl/|wget/|python|go-http|zgrab|masscan|nmap|scan|httpclient|java/|libwww|okhttp|"
                   r"headless|axios|node-fetch|facebookexternalhit|preview|monitor|uptime|checker|validator|fetcher|apache-httpclient|"
-                  r"wordpress/|feedparser|ahrefs|semrush|mj12|dotbot|petalbot|bytespider|gptbot|claudebot|ccbot|censys|expanse|"
+                  r"wordpress/|feedparser|ahrefs|semrush|mj12|dotbot|petalbot|bytespider|gptbot|ccbot|censys|expanse|"
                   r"internetmeasurement|^-?$", re.I)
 _STATIC = re.compile(r"\.(css|js|mjs|png|jpe?g|gif|svg|ico|webp|avif|bmp|tiff?|heic|woff2?|ttf|otf|eot|map|mp4|webm|mp3|ogg|wav|pdf|zip|gz|"
                      r"txt|xml|json|webmanifest)$", re.I)

@@ -720,6 +720,126 @@ window.AuroraOps = (ui) => {
   }
 
   // ======================================================================
+  //  Applications → WordPress Toolkit
+  // ======================================================================
+  async function viewWPToolkit(root) {
+    root.append(pageHead("WordPress Toolkit", "Every WordPress on this server in one place: update WordPress, plugins and themes, check for hacked files, lock it down, and try changes on a private staging copy first.",
+      [btn("Install WordPress", () => navigate("wordpress"), "btn-ghost")]));
+    const prog = progressBox();
+    const log = el("pre", { class: "log op-log", hidden: "" });
+    const body = el("div", {}, el("div", { class: "loading", text: "Finding WordPress sites…" }));
+    root.append(prog.node, log, body);
+    let list;
+    async function watch(id, label, after) {
+      log.hidden = false; prog.node.scrollIntoView({ block: "nearest" });
+      const j = await waitJob(id, (j) => { prog.set(j); log.textContent = j.output || ""; log.scrollTop = 1e9; });
+      if (j) toast(j.status === "done" ? label : "Something went wrong — see the log", j.status === "done" ? "good" : "bad");
+      if (after) after();
+    }
+    async function load() {
+      try { list = await API.wpt(); } catch (e) { body.innerHTML = ""; body.append(el("p", { class: "empty", text: e.message })); return; }
+      body.innerHTML = "";
+      if (!list.sites.length) { body.append(el("div", { class: "card" }, empty("wordpress", "No WordPress here yet", "Install one with the App Installer — it shows up here by itself.", btn("Install WordPress", () => navigate("wordpress"), "btn-primary")))); return; }
+      list.sites.forEach((s) => body.append(siteCard(s)));
+    }
+    function siteCard(s) {
+      const box = el("div", { class: "card op-wp" }, el("div", { class: "loading", text: `Checking ${s.url || s.path}…` }));
+      const fill = async () => {
+        let d;
+        try { d = await API.wptSite(s.path); } catch (e) { box.innerHTML = ""; box.append(el("p", { class: "empty", text: e.message })); return; }
+        box.innerHTML = "";
+        const pu = d.plugins.filter((p) => p.update === "available"), tu = d.themes.filter((t) => t.update === "available"), cu = d.core_updates.length;
+        const todo = pu.length + tu.length + (cu ? 1 : 0);
+        const hard = Object.values(d.hardening).filter(Boolean).length;
+        const autoOn = d.plugins.length && d.plugins.every((p) => p.auto_update === "on");
+        box.append(
+          el("div", { class: "op-plan-h" }, [el("span", { class: "op-plan-ico" }, icon("wordpress", 20)), el("div", { class: "grow" }, [el("h3", { text: d.url.replace(/^https?:\/\//, "") }),
+            el("p", { class: "muted mx-small", text: `WordPress ${d.version} · ${d.plugins.length} plugins · ${d.themes.length} themes · ${d.path}` })]),
+            d.db_error ? pill("database error", "bad") : todo ? pill(`${todo} update${todo > 1 ? "s" : ""}`, "warn") : pill("up to date", "good"), d.maintenance ? pill("maintenance mode", "warn") : null]),
+          d.db_error ? el("p", { class: "bk-warnline", text: d.db_error + " — check DB_NAME / DB_USER / DB_PASSWORD in wp-config.php, or restore the database from a backup." }) : null,
+          el("div", { class: "op-plan-facts" }, [
+            el("div", {}, [el("span", { class: "muted", text: "WordPress" }), el("b", { text: cu ? `${d.version} → ${d.core_updates[0].version}` : `${d.version} (latest)` })]),
+            el("div", {}, [el("span", { class: "muted", text: "Plugins" }), el("b", { text: pu.length ? `${pu.length} to update` : "all current" })]),
+            el("div", {}, [el("span", { class: "muted", text: "Security" }), el("b", { text: `${hard} of 4 protections on` })]),
+            el("div", {}, [el("span", { class: "muted", text: "Staging copy" }), d.staging ? el("a", { href: d.staging.url, target: "_blank", rel: "noopener", text: "open ↗" }) : el("b", { text: "none" })]),
+          ]),
+          el("div", { class: "toolbar" }, [
+            todo && !d.db_error ? btn("Update everything", () => call(() => API.wptAct("update", { path: d.path, what: "all" }), "Updating…", (r) => watch(r.job, "Updated", fill)), "btn-primary") : null,
+            btn("Check for hacked files", () => call(() => API.wptAct("scan", { path: d.path }), "Scanning…", (r) => watch(r.job, "Scan finished")), "btn-ghost"),
+            hard < 4 ? btn("Harden", () => call(() => API.wptAct("harden", { path: d.path }), "", (r) => { toast(r.done.join(" · "), "good"); fill(); }), "btn-ghost") : null,
+            btn(autoOn ? "Turn off auto-updates" : "Turn on auto-updates", () => call(() => API.wptAct("autoupdates", { path: d.path, on: !autoOn }), autoOn ? "Auto-updates off" : "WordPress, plugins and themes now update themselves", fill), "btn-ghost"),
+            btn(d.maintenance ? "End maintenance" : "Maintenance mode", () => call(() => API.wptAct("maintenance", { path: d.path, on: !d.maintenance }), "", fill), "btn-ghost"),
+            d.staging ? armed("Delete staging", "Click again", () => call(() => API.wptAct("staging", { path: d.path, on: false }), "Staging copy deleted", fill), "btn-ghost")
+              : btn("Make a staging copy", () => call(() => API.wptAct("staging", { path: d.path, on: true }), "Copying…", (r) => watch(r.job, "Staging copy ready", fill)), "btn-ghost"),
+            d.url ? el("a", { class: "btn btn-sm btn-ghost", href: d.url.replace(/\/$/, "") + "/wp-admin/", target: "_blank", rel: "noopener", text: "wp-admin ↗" }) : null,
+          ]),
+          pu.length || tu.length ? el("details", { class: "op-wp-list" }, [el("summary", { text: `What will be updated (${pu.length + tu.length})` }),
+            el("div", { class: "mx-list" }, [...pu.map((p) => el("div", { class: "mx-list-row" }, [pill("plugin"), el("b", { class: "grow", text: p.title || p.name }), el("span", { class: "muted", text: `${p.version} → ${p.update_version}` }),
+              btn("Update", () => call(() => API.wptAct("update", { path: d.path, what: "plugins", names: [p.name] }), "Updating…", (r) => watch(r.job, `${p.title || p.name} updated`, fill)), "btn-ghost")])),
+              ...tu.map((t) => el("div", { class: "mx-list-row" }, [pill("theme"), el("b", { class: "grow", text: t.title || t.name }), el("span", { class: "muted", text: `${t.version} → ${t.update_version}` })]))])]) : null,
+        );
+      };
+      fill();
+      return box;
+    }
+    load();
+  }
+
+  // ======================================================================
+  //  Files → Move from cPanel
+  // ======================================================================
+  async function viewMigrate(root) {
+    root.append(pageHead("Move from cPanel", "Bring a whole cPanel account over: websites, databases, mailboxes with their mail and passwords, forwarders and DNS zones. Nothing that already exists here is overwritten."));
+    const prog = progressBox();
+    const log = el("pre", { class: "log op-log", hidden: "" });
+    const body = el("div", {}, el("div", { class: "loading", text: "Looking for cPanel backups…" }));
+    root.append(prog.node, log, body);
+    let d;
+    async function watch(id, label, after) {
+      log.hidden = false; prog.node.scrollIntoView({ block: "nearest" });
+      const j = await waitJob(id, (j) => { prog.set(j); log.textContent = j.output || ""; log.scrollTop = 1e9; });
+      if (j) toast(j.status === "done" ? label : "Something went wrong — see the log", j.status === "done" ? "good" : "bad");
+      if (after) after();
+    }
+    async function load() {
+      try { d = await API.migrate(); } catch (e) { body.innerHTML = ""; body.append(el("p", { class: "empty", text: e.message })); return; }
+      body.innerHTML = "";
+      const url = el("input", { type: "url", placeholder: "https://old-host.example.com/…/backup-…tar.gz" });
+      body.append(card("1. Get the backup here", [
+        el("ol", { class: "op-steps" }, [el("li", { text: "In the old cPanel: Files → Backup → “Download a Full Account Backup” (or ask your host)." }),
+          el("li", {}, ["Upload the .tar.gz to ", el("code", { text: d.folder }), " with the File Manager or SFTP — or paste a download link:"])]),
+        el("div", { class: "op-banrow", style: "grid-template-columns:1fr auto" }, [field("Download link", url), btn("Download", () => call(() => API.migrateFetch(url.value.trim()), "Downloading…", (r) => watch(r.job, "Downloaded", load)), "btn-primary")]),
+      ]));
+      body.append(card("2. Pick the backup", [d.backups.length ? el("div", { class: "mx-list" }, d.backups.map((b) => el("div", { class: "mx-list-row" }, [icon("backup", 16), el("b", { class: "grow mx-ell", text: b.name }),
+        el("span", { class: "muted", text: `${fmtBytes(b.size)} · ${ago(b.mtime)}` }), btn("Look inside", () => inspect(b.path), "btn-primary")]))) : el("p", { class: "muted", text: "No cPanel backups found yet (files named cpmove-… or backup-…_user.tar.gz)." })]));
+    }
+    async function inspect(path) {
+      const box = el("div", {}, el("div", { class: "loading", text: "Reading the backup (big ones take a minute)…" }));
+      openModal("What's in this backup", box, []); modalWide();
+      let a;
+      try { a = await API.migrateAnalyze(path); } catch (e) { box.innerHTML = ""; box.append(el("p", { class: "empty", text: e.message })); return; }
+      box.innerHTML = "";
+      const chk = (label, sub, val = true) => { const c = el("input", { type: "checkbox" }); c.checked = val; c.dataset.v = label; return el("label", { class: "op-what" }, [c, el("div", {}, [el("b", { text: label }), sub ? el("span", { class: "muted", text: sub }) : null])]); };
+      const siteC = a.sites.map((s) => chk(s.domain, `${s.kind} · ${s.docroot_rel}${s.aliases.length ? ` · also ${s.aliases.join(", ")}` : ""}`));
+      const dbC = a.databases.map((x) => chk(x.name, fmtBytes(x.size)));
+      const mailC = chk(`${a.mailboxes.length} mailboxes`, `${a.mailboxes.map((m) => m.address).slice(0, 4).join(", ")}${a.mailboxes.length > 4 ? "…" : ""}${a.forwarders ? ` · ${a.forwarders} forwarders` : ""}`, a.mailboxes.length > 0);
+      const zoneC = chk(`${a.zones.length} DNS zones`, "Only if this server will answer DNS for these domains", false);
+      box.append(el("p", { class: "muted", text: `cPanel account “${a.user}” · main domain ${a.main_domain || "?"}` }),
+        el("div", { class: "mx-sub" }, "Websites"), el("div", { class: "op-whats" }, siteC.length ? siteC : [el("p", { class: "muted", text: "None" })]),
+        el("div", { class: "mx-sub" }, "Databases (users keep their passwords)"), el("div", { class: "op-whats" }, dbC.length ? dbC : [el("p", { class: "muted", text: "None" })]),
+        el("div", { class: "mx-sub" }, "Email & DNS"), el("div", { class: "op-whats" }, [mailC, ...(a.zones.length ? [zoneC] : [])]));
+      const go = el("button", { class: "btn btn-primary", text: "Import", onclick: () => {
+        const v = (arr) => arr.filter((l) => l.querySelector("input").checked).map((l) => l.querySelector("input").dataset.v);
+        closeModal();
+        call(() => API.migrateRun({ path, sites: v(siteC), databases: v(dbC), mail: mailC.querySelector("input").checked, zones: zoneC.querySelector("input").checked }), "Importing…",
+          (r) => watch(r.job, "Import finished"));
+      } });
+      document.querySelector("#modal .modal-foot").prepend(go);
+    }
+    load();
+  }
+
+  // ======================================================================
   //  A website manager's home: My Websites
   // ======================================================================
   async function viewMySites(root) {
@@ -795,5 +915,5 @@ window.AuroraOps = (ui) => {
   }
 
   return { activity: viewActivity, alerts: viewAlerts, schedbackups: viewSchedBackups, updates: viewUpdates, autossl: viewAutoSSL, isolation: viewIsolation,
-    dockerapps: viewDockerApps, servers: viewServers, mysites: viewMySites, panelusers: viewPanelUsers };
+    dockerapps: viewDockerApps, servers: viewServers, mysites: viewMySites, panelusers: viewPanelUsers, wptoolkit: viewWPToolkit, migrate: viewMigrate };
 };

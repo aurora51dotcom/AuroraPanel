@@ -64,6 +64,8 @@
   //  SVG line icons (Lucide-style)
   // ======================================================================
   const ICONS = {
+    t_wptool: '<circle cx="10" cy="10" r="7.5"/><path d="M4.6 7.2 7.5 15l2-5.2 2.1 5.2 2.8-7.8M6 7.2h3M11 7.2h3"/><path d="M19.7 14.6a2.6 2.6 0 0 0-3.5 3.3l-2.6 2.6 1.1 1.1 2.6-2.6a2.6 2.6 0 0 0 3.3-3.5l-1.5 1.5-1-1z"/>',
+    t_migrate: '<rect x="2" y="4" width="8" height="16" rx="2"/><rect x="14" y="4" width="8" height="16" rx="2"/><path d="M10 12h4"/><polyline points="12 10 14 12 12 14"/><path d="M5 8h2M17 8h2"/>',
     t_servers: '<rect x="2.5" y="3" width="12" height="7" rx="1.8"/><rect x="9.5" y="14" width="12" height="7" rx="1.8"/><path d="M5.5 6.5h.01M12.5 17.5h.01M8.5 10v2.5h7V14"/>',
     t_docker: '<path d="M2.5 12.5h17.2c.9-1.4 1.6-2.4 2.8-2.8-.6-.6-1.6-.8-2.5-.5-.2-1.3-1-2.3-2-2.9l-.5.8c.7.8.9 1.9.5 2.9-.4.3-1 .5-1.6.5H2.5c-.3 4.7 2.3 8 7.6 8 4.6 0 8-2.2 9.6-6"/><path d="M5 10V8h2.5v2M7.5 10V8H10v2M10 10V8h2.5v2M7.5 8V6H10v2M10 8V6h2.5v2M12.5 10V8H15v2"/>',
     t_isolate: '<rect x="3" y="3" width="8" height="8" rx="2"/><rect x="13" y="3" width="8" height="8" rx="2"/><rect x="3" y="13" width="8" height="8" rx="2"/><rect x="13.5" y="16" width="7" height="5" rx="1"/><path d="M15 16v-1.3a2 2 0 0 1 4 0V16"/>',
@@ -226,7 +228,7 @@
     packages: "packages", network: "network", firewall: "firewall", users: "users",
     mysql: "database", mysqlwiz: "wizard", pgsql: "database", pgwiz: "wizard",
     vhosts: "globe", redirects: "redirect", zones: "zone", dyndns: "refresh", ddnshosts: "refresh",
-    activity: "t_activity", isolation: "t_isolate", dockerapps: "t_docker", servers: "t_servers", mysites: "globe", panelusers: "t_usergear", alerts: "t_bell", schedbackups: "t_cloudup", updates: "t_update", autossl: "t_autossl",
+    activity: "t_activity", isolation: "t_isolate", dockerapps: "t_docker", servers: "t_servers", mysites: "globe", panelusers: "t_usergear", wptoolkit: "t_wptool", migrate: "t_migrate", alerts: "t_bell", schedbackups: "t_cloudup", updates: "t_update", autossl: "t_autossl",
     visitors: "visitors", errors: "errors", bandwidth: "gauge", rawaccess: "rawlog", analytics: "chart", resources: "dashboard",
     ssh: "key", ipblocker: "ban", ssl: "lock", panelhttps: "lock", tokens: "token", hotlink: "link",
     leech: "trap", modsec: "shield", security: "phone", fixperms: "home", virus: "virus",
@@ -606,7 +608,7 @@
     indexes: "Indexes", mime: "MIME Types", errorpages: "Error Pages", handlers: "Apache Handlers",
     virus: "Virus Scanner", dns: "Track DNS",
     ssh: "SSH Access", ipblocker: "IP Blocker & Trust", ssl: "SSL/TLS Certificates", tokens: "Manage API Tokens",
-    hotlink: "Hotlink Protection", redirects: "Redirects", modsec: "WAF Firewall", activity: "Activity Log", isolation: "Site Isolation", dockerapps: "Docker Apps", servers: "Servers", mysites: "My Websites", panelusers: "Panel Users", alerts: "Alerts", schedbackups: "Scheduled Backups", updates: "Updates", autossl: "AutoSSL", ddnshosts: "Dynamic DNS", visitors: "Visitors", errors: "Errors", bandwidth: "Bandwidth", rawaccess: "Raw Access", analytics: "Analytics", resources: "Resource Usage", leech: "Fail2ban",
+    hotlink: "Hotlink Protection", redirects: "Redirects", modsec: "WAF Firewall", activity: "Activity Log", isolation: "Site Isolation", dockerapps: "Docker Apps", servers: "Servers", mysites: "My Websites", panelusers: "Panel Users", wptoolkit: "WordPress Toolkit", migrate: "Move from cPanel", alerts: "Alerts", schedbackups: "Scheduled Backups", updates: "Updates", autossl: "AutoSSL", ddnshosts: "Dynamic DNS", visitors: "Visitors", errors: "Errors", bandwidth: "Bandwidth", rawaccess: "Raw Access", analytics: "Analytics", resources: "Resource Usage", leech: "Fail2ban",
     fixperms: "Fix Home Permissions", vhosts: "Domains", dyndns: "Dynamic DNS Updater", zones: "Zone Editor",
     mysql: "Manage Databases", mysqlwiz: "MariaDB Wizard", pgsql: "PostgreSQL Databases",
     pgwiz: "PostgreSQL Wizard",
@@ -952,6 +954,7 @@
       { label: "Backup", icon: "backup", view: "backups" },
       { label: "Backup Wizard", icon: "wizard", view: "backupwiz" },
       { label: "Scheduled Backups", icon: "t_cloudup", view: "schedbackups" },
+      { label: "Move from cPanel", icon: "t_migrate", view: "migrate" },
       { label: "Git Version Control", icon: "git", view: "git" },
       { label: "Inodes Usage", icon: "indexes", view: "inodes" },
     ]},
@@ -976,6 +979,7 @@
     { name: "Applications", icon: "apps", tiles: [
       { label: "App Installer", icon: "apps", view: "appstore" },
       { label: "Docker Apps", icon: "t_docker", view: "dockerapps" },
+      { label: "WordPress Toolkit", icon: "t_wptool", view: "wptoolkit" },
       { label: "WordPress", icon: "wordpress", view: "wordpress" },
       { label: "System Applications", icon: "services", view: "sysapps" },
       { label: "Application Manager", icon: "packages", view: "appmgr" },

@@ -25,7 +25,7 @@ from starlette.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel
 
 from . import (
-    abuse, alerts, antivirus, audit, authz, autossl, dockerapps, isolate, panelusers, servers, schedules, tasks, updates, apache, apitokens, appmanager, auth, backups, config, cron,
+    abuse, alerts, antivirus, audit, authz, autossl, dockerapps, isolate, migrate, panelusers, servers, wptoolkit, schedules, tasks, updates, apache, apitokens, appmanager, auth, backups, config, cron,
     apps, databases, diskusage, dnszones, domains, fail2ban, netmgr, sites, files, firewall, ipblocker, jobs,
     metrics, modsecurity, netdiag, waf, packages, perms, phpmgr, services, sslcerts, sshaccess,
     sysapps, system_info, terminal, twofa, users,
@@ -3642,6 +3642,107 @@ class RebootBody(BaseModel):
 @app.post("/api/updates/reboot")
 def api_upd_reboot(body: RebootBody, user: str = auth.CurrentUser):
     return _upd_call(lambda: updates.cancel_reboot() if body.cancel else updates.reboot(body.minutes))
+
+
+# --------------------------------------------------------------------------- #
+# WordPress Toolkit
+# --------------------------------------------------------------------------- #
+def _wp_call(fn):
+    try:
+        r = fn()
+        return {"job": r.id} if hasattr(r, "id") else r
+    except wptoolkit.WPError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/wptoolkit")
+def api_wpt(user: str = auth.CurrentUser):
+    return {"sites": wptoolkit.sites(), "cli": wptoolkit.cli_ready()}
+
+
+@app.get("/api/wptoolkit/site")
+def api_wpt_site(path: str, user: str = auth.CurrentUser):
+    return _wp_call(lambda: wptoolkit.details(path))
+
+
+class WPActBody(BaseModel):
+    path: str
+    what: str = "all"
+    names: list[str] = []
+    on: bool = True
+
+
+@app.post("/api/wptoolkit/update")
+def api_wpt_update(body: WPActBody, user: str = auth.CurrentUser):
+    return _wp_call(lambda: wptoolkit.update(body.path, body.what, body.names))
+
+
+@app.post("/api/wptoolkit/scan")
+def api_wpt_scan(body: WPActBody, user: str = auth.CurrentUser):
+    return _wp_call(lambda: wptoolkit.scan(body.path))
+
+
+@app.post("/api/wptoolkit/harden")
+def api_wpt_harden(body: WPActBody, user: str = auth.CurrentUser):
+    return _wp_call(lambda: wptoolkit.harden(body.path))
+
+
+@app.post("/api/wptoolkit/autoupdates")
+def api_wpt_auto(body: WPActBody, user: str = auth.CurrentUser):
+    return _wp_call(lambda: wptoolkit.auto_updates(body.path, body.on))
+
+
+@app.post("/api/wptoolkit/maintenance")
+def api_wpt_maint(body: WPActBody, user: str = auth.CurrentUser):
+    return _wp_call(lambda: wptoolkit.maintenance(body.path, body.on))
+
+
+@app.post("/api/wptoolkit/staging")
+def api_wpt_staging(body: WPActBody, user: str = auth.CurrentUser):
+    return _wp_call(lambda: wptoolkit.make_staging(body.path) if body.on else wptoolkit.delete_staging(body.path))
+
+
+# --------------------------------------------------------------------------- #
+# Move from cPanel
+# --------------------------------------------------------------------------- #
+def _mig_call(fn):
+    try:
+        r = fn()
+        return {"job": r.id} if hasattr(r, "id") else r
+    except (migrate.MigrateError, OSError, __import__("tarfile").TarError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/migrate")
+def api_mig(user: str = auth.CurrentUser):
+    return {"backups": migrate.candidates(), "folder": str(migrate._dir())}
+
+
+@app.get("/api/migrate/analyze")
+def api_mig_analyze(path: str, user: str = auth.CurrentUser):
+    return _mig_call(lambda: migrate.analyze(path))
+
+
+class MigFetchBody(BaseModel):
+    url: str
+
+
+@app.post("/api/migrate/fetch")
+def api_mig_fetch(body: MigFetchBody, user: str = auth.CurrentUser):
+    return _mig_call(lambda: migrate.fetch(body.url))
+
+
+class MigRunBody(BaseModel):
+    path: str
+    sites: list[str] = []
+    databases: list[str] = []
+    mail: bool = True
+    zones: bool = False
+
+
+@app.post("/api/migrate/run")
+def api_mig_run(body: MigRunBody, user: str = auth.CurrentUser):
+    return _mig_call(lambda: migrate.run(body.path, body.model_dump()))
 
 
 # --------------------------------------------------------------------------- #

@@ -2343,3 +2343,8 @@ label.op-rule { justify-content: flex-start; cursor: pointer; }
 .op-pwrow { display: flex; gap: 6px; align-items: center; }
 .op-pwrow input { flex: 1; min-width: 0; }
 #role-pill { margin-left: 8px; }
+
+/* WordPress toolkit */
+.op-wp { margin-bottom: 14px; }
+.op-wp-list { margin-top: 10px; }
+.op-wp-list summary { cursor: pointer; font-size: 13px; font-weight: 650; color: var(--text-dim); margin-bottom: 8px; }

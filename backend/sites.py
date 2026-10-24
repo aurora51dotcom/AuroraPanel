@@ -816,6 +816,10 @@ def remove_site(name: str) -> dict:
         raise SiteError("Refusing to remove a system default site")
     _run(["a2dissite", "-q", conf.name])
     conf.unlink(missing_ok=True)
+    # the panel's own self-signed certificate for it, and a2dissite's marker
+    for leftover in (SSL_DIR / f"{_slug(name)}.crt", SSL_DIR / f"{_slug(name)}.key",
+                     Path("/var/lib/apache2/site/disabled_by_admin") / conf.stem):
+        leftover.unlink(missing_ok=True)
     _run(["systemctl", "reload", "apache2"])
     return {"ok": True}
 

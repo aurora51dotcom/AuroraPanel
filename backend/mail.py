@@ -445,6 +445,25 @@ def create_account(address: str, password: str, quota_mb: int = 1024, name: str 
     return {"ok": True, "address": a}
 
 
+def import_account(address: str, crypt_hash: str, quota_mb: int = 0) -> dict:
+    """A mailbox moved from another server, keeping its password: crypt_hash is the old server's
+    crypt(3) hash ($6$… / $5$… / $1$…), which Dovecot checks as-is."""
+    _require()
+    if not re.fullmatch(r"\$(1|5|6|2[aby]?|y)\$[./A-Za-z0-9$,=+-]{8,200}", crypt_hash or ""):
+        raise MailError("unsupported password hash")
+    s = load()
+    a = _addr(address)
+    if a in s["accounts"]:
+        raise MailError("already exists here")
+    _ensure_domain(s, a.split("@")[1])
+    s["accounts"][a] = {"hash": "{CRYPT}" + crypt_hash, "quota_mb": max(0, int(quota_mb or 0)), "name": "", "created": int(time.time()),
+                        "suspend": {"login": False, "incoming": False, "outgoing": False}, "imported": True}
+    save(s)
+    apply(s)
+    ensure_dkim(a.split("@")[1])
+    return {"ok": True, "address": a}
+
+
 def update_account(address: str, password: str | None = None, quota_mb: int | None = None,
                    suspend: dict | None = None, name: str | None = None) -> dict:
     from . import authz
