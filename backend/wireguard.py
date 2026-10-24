@@ -20,7 +20,7 @@ IFACE = "wg0"
 CONF = Path(f"/etc/wireguard/{IFACE}.conf")
 STATE = STATE_DIR / "wireguard.json"
 UNIT = f"wg-quick@{IFACE}"
-PKGS = ["wireguard-tools", "qrencode", "nftables", "iproute2"]
+PKGS = ["wireguard-tools", "qrencode", "nftables", "iproute2", "iputils-ping"]
 _DEFAULT = {"port": 51820, "subnet": "10.8.0.0/24", "private_key": "", "public_key": "", "peers": []}
 
 
@@ -57,7 +57,8 @@ def _apply(s: dict):
     if not unit_state(UNIT)["active"]:
         return
     stripped = run(["wg-quick", "strip", IFACE]).stdout
-    with tempfile.NamedTemporaryFile("w", delete=False, suffix=".conf") as f:
+    # Ubuntu's AppArmor profile for wg only lets it read files under /etc/wireguard, not /tmp.
+    with tempfile.NamedTemporaryFile("w", delete=False, suffix=".conf", dir=CONF.parent, prefix=".sync-") as f:
         f.write(stripped)
         tmp = f.name
     try:
@@ -232,7 +233,7 @@ def selftest() -> jobs.Job:
             raise VPNError(f"{test_ip} is taken by a client; can't run the self-test")
         priv, pub = _genkey()
         ns_cleanup()
-        keyfile = Path(tempfile.mkstemp()[1])
+        keyfile = Path(tempfile.mkstemp(dir=CONF.parent, prefix=".selftest-")[1])  # see _apply: AppArmor
         ok = False
         try:
             keyfile.write_text(priv + "\n")

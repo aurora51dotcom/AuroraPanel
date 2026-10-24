@@ -267,6 +267,8 @@ def ufw_open(port: int, proto: str, subnet: str | None = None):
         # ufw's default FORWARD policy is DROP; let VPN clients be routed.
         subprocess.run([ufw, "route", "allow", "from", subnet], capture_output=True, text=True, timeout=20)
         subprocess.run([ufw, "route", "allow", "to", subnet], capture_output=True, text=True, timeout=20)
+        # …and reach this server itself (the panel, DNS, file shares) — that's what a home VPN is for.
+        subprocess.run([ufw, "allow", "from", subnet, "comment", "AuroraPanel VPN clients"], capture_output=True, text=True, timeout=20)
 
 
 def ufw_close(port: int, proto: str, subnet: str | None = None):
@@ -277,6 +279,7 @@ def ufw_close(port: int, proto: str, subnet: str | None = None):
     if subnet:
         subprocess.run([ufw, "route", "delete", "allow", "from", subnet], capture_output=True, text=True, timeout=20)
         subprocess.run([ufw, "route", "delete", "allow", "to", subnet], capture_output=True, text=True, timeout=20)
+        subprocess.run([ufw, "delete", "allow", "from", subnet], capture_output=True, text=True, timeout=20)
 
 
 # ---- Self-test helpers (network namespace playing the part of a client) ----
@@ -292,6 +295,13 @@ def ns_exec(argv: list[str], timeout: int = 20) -> subprocess.CompletedProcess:
 
 
 def ns_ping(log, target: str, what: str) -> bool:
+    if not shutil.which("ping", path=APT_ENV["PATH"]):
+        # Minimal cloud images ship without ping; without it the test can't tell anything.
+        subprocess.run(["apt-get", "-o", "DPkg::Lock::Timeout=120", "-y", "install", "iputils-ping"],
+                       capture_output=True, text=True, timeout=300, env={**os.environ, **APT_ENV})
+        if not shutil.which("ping", path=APT_ENV["PATH"]):
+            log(f"✖ {what}: the ping tool isn't installed (apt install iputils-ping)")
+            return False
     r = ns_exec(["ping", "-c", "3", "-W", "2", target], timeout=15)
     ok = r.returncode == 0
     m = re.search(r"(\d+)% packet loss", r.stdout)

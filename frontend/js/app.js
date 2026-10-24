@@ -5832,7 +5832,8 @@
         btn("Unban", async () => { try { await API.guardUnban(ip); toast(`${ip} unbanned`, "good"); load(); } catch (e) { toast(e.message, "bad"); } }, "btn-ghost")]);
       const rep = reported[ip];
       return el("div", { class: "net-actions" }, [
-        scope === "internet" ? (rep ? pill("reported", "warn") : btn("Report", (e) => reportIp(ip, e.currentTarget), "btn-ghost")) : null,
+        scope === "internet" ? (rep ? el("button", { type: "button", class: "pill warn pill-btn-rep", title: `Reported to ${(rep.to || []).join(", ")} — click to read or send again`, text: "reported", onclick: (e) => reportIp(ip, null) })
+          : btn("Report", (e) => reportIp(ip, e.currentTarget), "btn-ghost")) : null,
         btn("Ban", () => banDialog(ip, load), "btn-danger"), btn("Trust", () => trustDialog(ip, load), "btn-ghost")].filter(Boolean));
     }
     let reported = {};
@@ -5845,24 +5846,16 @@
       if (button) { button.disabled = false; button.textContent = "Report"; }
       if (!p.mail_ready) { toast("Reports go out through this server's mail — set up Email first", "bad"); return; }
       if (!p.info.contacts.length) { toast(`No abuse contact is published for ${ip}`, "bad"); return; }
-      const send = async (sender) => {
-        try {
-          const r = await API.abuseReport({ ip, sender });
-          toast(`Reported ${ip} to ${r.to.join(", ")} (from ${r.from})`, "good");
-          reported[ip] = { to: r.to }; closeModal(); load();
-        } catch (e) { toast(e.message, "bad"); }
-      };
-      if (p.from && !p.reported) return send("");  // one click: the sender is remembered
       const from = el("select", {}, p.accounts.map((a) => el("option", { value: a, text: a })));
       if (p.from) from.value = p.from;
       openModal(`Report ${ip}`, el("div", { class: "em-form" }, [
         kv([["Network", `${p.info.network || "—"}${p.info.country ? ` (${p.info.country})` : ""}`], ["Abuse contact", p.info.contacts.join(", ")],
           ["Evidence", `${p.events} failed login${p.events === 1 ? "" : "s"} in the last 7 days`]]),
-        p.reported ? el("div", { class: "dm-note" }, [icon("info", 15), el("span", { text: `Already reported to ${p.reported.to.join(", ")} — sending again repeats the report.` })]) : null,
-        p.accounts.length ? field("Send from", from, "Remembered for next time — later reports go out with one click.")
+        p.reported ? el("div", { class: "dm-note" }, [icon("info", 15), el("span", { text: `Reported to ${p.reported.to.join(", ")} on ${new Date(p.reported.ts * 1000).toLocaleString()} from ${p.reported.from} (${p.reported.events} failed logins). Sending again repeats the report.` })]) : null,
+        p.accounts.length ? field("Send from", from, "Remembered for next time.")
           : el("p", { class: "empty", text: "Create an email account first (Email → Email Accounts)." }),
         el("h4", { class: "em-sub", text: "The message" }), el("pre", { class: "log", style: "max-height:260px", text: p.body }),
-      ].filter(Boolean)), p.accounts.length ? [el("button", { class: "btn btn-primary", text: "Send report", onclick: async (e) => {
+      ].filter(Boolean)), p.accounts.length ? [el("button", { class: "btn btn-primary", text: p.reported ? "Send again" : "Send report", onclick: async (e) => {
         e.currentTarget.disabled = true;
         try { const r = await API.abuseReport({ ip, sender: from.value, force: !!p.reported }); toast(`Reported ${ip} to ${r.to.join(", ")}`, "good"); reported[ip] = { to: r.to }; closeModal(); load(); }
         catch (err) { toast(err.message, "bad"); e.currentTarget.disabled = false; }
