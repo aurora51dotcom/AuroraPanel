@@ -2288,3 +2288,25 @@ label.op-rule { justify-content: flex-start; cursor: pointer; }
   .op-name { grid-template-columns: minmax(0, 1fr) auto; }
   .op-name > span:last-child { grid-column: 1 / -1; }
 }
+.op-isos { display: grid; gap: 8px; }
+.op-iso { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px solid var(--stroke); border-radius: 14px; min-width: 0; }
+.op-iso .grow { min-width: 0; }
+.op-iso p { margin: 2px 0 0; }
+.op-iso.on .em-rcard-ico { color: var(--good); background: rgba(63,208,143,.14); }
+
+/* Docker apps */
+.op-dapps { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
+.op-dapp, .op-capp { display: flex; flex-direction: column; gap: 10px; padding: 14px; border: 1px solid var(--stroke); border-radius: 16px; min-width: 0; }
+.op-dapp-h { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.op-dapp-h .grow { min-width: 0; }
+.op-dapp-h p { margin: 2px 0 0; }
+.op-dapp-ico { width: 40px; height: 40px; flex: none; border-radius: 12px; display: grid; place-items: center; font-weight: 800; font-size: 18px;
+  color: hsl(var(--h) 80% 72%); background: linear-gradient(150deg, hsl(var(--h) 70% 50% / .28), hsl(var(--h) 70% 50% / .08)); box-shadow: inset 0 0 0 1px hsl(var(--h) 70% 60% / .3); }
+:root[data-theme="light"] .op-dapp-ico { color: hsl(var(--h) 65% 38%); }
+.op-dapp-url { font-size: 13px; font-weight: 600; color: var(--accent-2); word-break: break-all; }
+.op-dapp p, .op-capp p { margin: 0; }
+.op-dapp-act { display: flex; flex-wrap: wrap; gap: 6px; margin-top: auto; }
+.op-dapp-act a.btn { display: inline-flex; align-items: center; }
+.op-cat { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+.op-capp-d { font-size: 12.5px; color: var(--text-dim); line-height: 1.45; flex: 1; }
+.op-catbar { margin-bottom: 12px; }

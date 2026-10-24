@@ -79,6 +79,7 @@ SERVER_APPS: dict[str, dict] = {
     "fail2ban": {"units": ["fail2ban"], "procs": ("fail2ban-server",), "view": "leech", "ram": "~20–40 MB"},
     "clamav": {"units": ["clamav-freshclam"], "procs": ("freshclam", "clamd"), "view": "virus", "ram": "~10 MB (scans: ~1 GB)", "name": "Antivirus"},
     "ufw": {"units": [], "procs": (), "view": "firewall", "ram": "none (kernel rules)"},  # on/off lives on the Firewall page
+    "docker": {"units": ["docker"], "procs": ("dockerd", "containerd"), "view": "dockerapps", "ram": "~60 MB + the apps", "name": "Docker"},
     "certbot": {"units": ["certbot.timer"], "procs": (), "view": "ssl", "ram": "none (runs twice a day)", "name": "Let's Encrypt"},
 }
 _ACTIONS = {"start", "stop", "restart"}
@@ -239,13 +240,14 @@ def status() -> dict:
     act = _active(units)
     for k, v in SERVER_APPS.items():
         c = requires.COMPONENTS[k]
+        pk = c["pkgs"] if not callable(c["pkgs"]) else ["docker.io", "docker compose"]  # chosen per OS at install time
         installed = requires.installed(k)
         running = [j for j in _jobs.find(requires=k) if j.status == "running"]
         # ufw is "active" only when the firewall is on; the unit itself is just its boot loader.
         on = [u for u in v["units"] if act.get(u)]
         apps.append({
             "id": k, "name": v.get("name", c["name"]), "group": "server", "desc": c["desc"], "ram_typical": v["ram"],
-            "package": ", ".join(c["pkgs"][:3]) + ("…" if len(c["pkgs"]) > 3 else ""), "service": ", ".join(v["units"]) or None,
+            "package": ", ".join(pk[:3]) + ("…" if len(pk) > 3 else ""), "service": ", ".join(v["units"]) or None,
             "installed": installed, "version": None, "broken": False,
             "active": bool(v["units"]) and len(on) == len(v["units"]), "partial": bool(on) and len(on) < len(v["units"]),
             "units": [{"unit": u, "active": bool(act.get(u))} for u in v["units"]],

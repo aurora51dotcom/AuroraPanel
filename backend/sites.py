@@ -48,6 +48,7 @@ DEFAULTS = {
     "indexes": False, "allow_override": True,
     "gzip": True, "cache_static": False, "security_headers": True,
     "maintenance": False, "custom": "",
+    "php_pool": "",                      # isolated: PHP runs in this PHP-FPM pool (Security → Site Isolation)
 }
 
 
@@ -305,6 +306,10 @@ def _clean(settings: dict) -> dict:
     if re.search(r"(?i)</?\s*VirtualHost", custom):
         raise SiteError("Custom directives can't open or close a VirtualHost")
     s["custom"] = custom.strip()[:8000]
+    pool = str(s.get("php_pool") or "")
+    if pool and not re.fullmatch(r"aurora-[a-z0-9-]{1,48}", pool):
+        raise SiteError("Invalid PHP pool")
+    s["php_pool"] = pool
     return s
 
 
@@ -367,6 +372,11 @@ def _content(s: dict, scheme: str) -> list[str]:
     slug = _slug(name)
     L += [f"    ErrorLog ${{APACHE_LOG_DIR}}/{slug}-error.log",
           f"    CustomLog ${{APACHE_LOG_DIR}}/{slug}-access.log combined"]
+    if s.get("php_pool"):
+        # Isolated: PHP runs as the site's own user in its PHP-FPM pool (overrides mod_php for this site).
+        L += ['    <FilesMatch "\\.(php|phtml|phar)$">',
+              f'        SetHandler "proxy:unix:/run/php/{s["php_pool"]}.sock|fcgi://localhost"',
+              "    </FilesMatch>"]
     if s["custom"]:
         L += ["    # --- custom directives ---"] + ["    " + ln for ln in s["custom"].splitlines()]
     return L
@@ -457,6 +467,8 @@ def _needed_mods(s: dict) -> list[str]:
         mods.append("deflate")
     if s["cache_static"]:
         mods.append("expires")
+    if s.get("php_pool"):
+        mods.append("proxy_fcgi")
     return mods
 
 
@@ -538,6 +550,8 @@ def save_site(original_name: str, settings: dict) -> dict:
         raise SiteError("No site found with that name")
     if conf.name in SYSTEM_CONFS:
         raise SiteError("System default sites are read-only here")
+    if "php_pool" not in (settings or {}):  # an older page that doesn't know isolation must not switch it off
+        settings = {**settings, "php_pool": _settings_from_conf(conf).get("php_pool", "")}
     s = _clean(settings)
     if s["server_name"] != original_name.lower() and _conf_for(s["server_name"]):
         raise SiteError("Another site already uses that name")

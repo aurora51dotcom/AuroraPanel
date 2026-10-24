@@ -25,7 +25,7 @@ from starlette.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel
 
 from . import (
-    abuse, alerts, antivirus, audit, autossl, schedules, tasks, updates, apache, apitokens, appmanager, auth, backups, config, cron,
+    abuse, alerts, antivirus, audit, autossl, dockerapps, isolate, schedules, tasks, updates, apache, apitokens, appmanager, auth, backups, config, cron,
     apps, databases, diskusage, dnszones, domains, fail2ban, netmgr, sites, files, firewall, ipblocker, jobs,
     metrics, modsecurity, netdiag, waf, packages, perms, phpmgr, services, sslcerts, sshaccess,
     sysapps, system_info, terminal, twofa, users,
@@ -3570,6 +3570,97 @@ class RebootBody(BaseModel):
 @app.post("/api/updates/reboot")
 def api_upd_reboot(body: RebootBody, user: str = auth.CurrentUser):
     return _upd_call(lambda: updates.cancel_reboot() if body.cancel else updates.reboot(body.minutes))
+
+
+# --------------------------------------------------------------------------- #
+# Docker apps
+# --------------------------------------------------------------------------- #
+def _dk_call(fn):
+    try:
+        r = fn()
+        return {"job": r.id} if hasattr(r, "id") else r
+    except (dockerapps.DockerError, sites.SiteError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/docker")
+def api_dk(user: str = auth.CurrentUser):
+    return {**dockerapps.catalog(), **dockerapps.listing()}
+
+
+class DockerInstallBody(BaseModel):
+    app: str
+    name: str = ""
+    access: str = "proxy"
+    domain: str = ""
+    folders: dict = {}
+
+
+@app.post("/api/docker/install")
+def api_dk_install(body: DockerInstallBody, user: str = auth.CurrentUser):
+    return _dk_call(lambda: dockerapps.install(body.app, body.name, body.access, body.domain, body.folders))
+
+
+@app.post("/api/docker/prune")
+def api_dk_prune(user: str = auth.CurrentUser):
+    return _dk_call(dockerapps.prune)
+
+
+@app.post("/api/docker/apps/{name}/{action}")
+def api_dk_ctl(name: str, action: str, user: str = auth.CurrentUser):
+    if action == "update":
+        return _dk_call(lambda: dockerapps.update(name))
+    return _dk_call(lambda: dockerapps.control(name, action))
+
+
+@app.get("/api/docker/apps/{name}/logs")
+def api_dk_logs(name: str, lines: int = 300, user: str = auth.CurrentUser):
+    return _dk_call(lambda: dockerapps.logs(name, lines))
+
+
+@app.get("/api/docker/apps/{name}/secret")
+def api_dk_secret(name: str, key: str, user: str = auth.CurrentUser):
+    return _dk_call(lambda: dockerapps.secret(name, key))
+
+
+@app.delete("/api/docker/apps/{name}")
+def api_dk_remove(name: str, data: bool = False, user: str = auth.CurrentUser):
+    return _dk_call(lambda: dockerapps.remove(name, data))
+
+
+# --------------------------------------------------------------------------- #
+# Site isolation (PHP-FPM pool + Linux user per site)
+# --------------------------------------------------------------------------- #
+def _iso_call(fn):
+    try:
+        r = fn()
+        return {"job": r.id} if hasattr(r, "id") else r
+    except (isolate.IsolateError, sites.SiteError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+class IsoBody(BaseModel):
+    site: str = ""
+
+
+@app.get("/api/isolation")
+def api_iso(user: str = auth.CurrentUser):
+    return isolate.status()
+
+
+@app.post("/api/isolation/enable")
+def api_iso_on(body: IsoBody, user: str = auth.CurrentUser):
+    return _iso_call(lambda: isolate.enable_all_job() if not body.site else isolate.enable_job(body.site))
+
+
+@app.post("/api/isolation/disable")
+def api_iso_off(body: IsoBody, user: str = auth.CurrentUser):
+    return _iso_call(lambda: isolate.disable(body.site))
+
+
+@app.post("/api/isolation/fix")
+def api_iso_fix(body: IsoBody, user: str = auth.CurrentUser):
+    return _iso_call(lambda: isolate.fix_permissions(body.site))
 
 
 # --------------------------------------------------------------------------- #

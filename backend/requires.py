@@ -10,6 +10,7 @@ Only ids from COMPONENTS are accepted; package names never come from the client.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import socket
 import subprocess
@@ -109,6 +110,21 @@ def _waf_setup() -> list[str]:
         return _waf().setup()
     except _waf().WafError as e:
         return [f"! {e}"]
+
+
+def _docker():
+    from . import dockerapps
+    return dockerapps
+
+
+def _candidate(pkg: str) -> bool:
+    """Is pkg available from this system's apt sources?"""
+    out = _run(["apt-cache", "policy", pkg], 60).stdout
+    return bool(re.search(r"Candidate:\s*(?!\(none\))\S", out))
+
+
+def _pkgs(c: dict) -> list[str]:
+    return c["pkgs"]() if callable(c["pkgs"]) else c["pkgs"]
 
 
 def _collect(fn) -> list[str]:
@@ -265,6 +281,13 @@ COMPONENTS: dict[str, dict] = {
         "pkgs": ["rclone"],
         "check": lambda: shutil.which("rclone", path=PATH) is not None,
     },
+    "docker": {
+        "name": "Docker", "icon": "packages", "size": "about 120 MB",
+        "desc": "Runs self-hosted apps in containers: Home Assistant, Jellyfin, Vaultwarden, Pi-hole, Uptime Kuma and more, one click each.",
+        "pkgs": lambda: ["docker.io", "docker-compose-v2" if _candidate("docker-compose-v2") else "docker-compose"],
+        "check": lambda: _docker().installed(),
+        "post": lambda: _docker().post_install(),
+    },
     "composer": {
         "name": "Composer", "icon": "packages", "size": "about 2 MB",
         "desc": "PHP's package manager, used by Laravel, Symfony and other frameworks.",
@@ -319,7 +342,7 @@ def install(cid: str) -> jobs.Job:
                 raise RequiresError(why)
 
     def fn(log):
-        pkgs = [p for n in plan for p in COMPONENTS[n]["pkgs"]]
+        pkgs = [p for n in plan for p in _pkgs(COMPONENTS[n])]
         names = " + ".join(COMPONENTS[n]["name"] for n in plan)
         log(f"• Installing {names}: {' '.join(pkgs)}")
         for n in plan:

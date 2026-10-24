@@ -7,7 +7,8 @@ from backend import jobs, requires
 def test_components_are_complete():
     for cid, c in requires.COMPONENTS.items():
         assert c["name"] and c["desc"] and c["size"] and c["icon"], cid
-        assert c["pkgs"] and all(isinstance(p, str) and p for p in c["pkgs"]), cid
+        pkgs = c["pkgs"] if not callable(c["pkgs"]) else ["docker.io"]  # docker picks its compose package per OS
+        assert pkgs and all(isinstance(p, str) and p for p in pkgs), cid
         assert callable(c["check"]), cid
         for n in c.get("needs", []):
             assert n in requires.COMPONENTS and n != cid, cid

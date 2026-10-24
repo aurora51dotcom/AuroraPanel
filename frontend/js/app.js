@@ -64,6 +64,8 @@
   //  SVG line icons (Lucide-style)
   // ======================================================================
   const ICONS = {
+    t_docker: '<path d="M2.5 12.5h17.2c.9-1.4 1.6-2.4 2.8-2.8-.6-.6-1.6-.8-2.5-.5-.2-1.3-1-2.3-2-2.9l-.5.8c.7.8.9 1.9.5 2.9-.4.3-1 .5-1.6.5H2.5c-.3 4.7 2.3 8 7.6 8 4.6 0 8-2.2 9.6-6"/><path d="M5 10V8h2.5v2M7.5 10V8H10v2M10 10V8h2.5v2M7.5 8V6H10v2M10 8V6h2.5v2M12.5 10V8H15v2"/>',
+    t_isolate: '<rect x="3" y="3" width="8" height="8" rx="2"/><rect x="13" y="3" width="8" height="8" rx="2"/><rect x="3" y="13" width="8" height="8" rx="2"/><rect x="13.5" y="16" width="7" height="5" rx="1"/><path d="M15 16v-1.3a2 2 0 0 1 4 0V16"/>',
     t_activity: '<path d="M3 5h11M3 12h7M3 19h9"/><circle cx="17.5" cy="15.5" r="4.5"/><path d="M17.5 13.3v2.4l1.6 1"/>',
     t_bell: '<path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 0 0 4 0"/><path d="M12 3v2"/>',
     t_cloudup: '<path d="M7 18.5a4.6 4.6 0 0 1-.7-9.1A6.2 6.2 0 0 1 18.2 8.3 4.1 4.1 0 0 1 18 16.5"/><path d="M12 20.5v-9"/><polyline points="9 14.5 12 11.5 15 14.5"/>',
@@ -223,7 +225,7 @@
     packages: "packages", network: "network", firewall: "firewall", users: "users",
     mysql: "database", mysqlwiz: "wizard", pgsql: "database", pgwiz: "wizard",
     vhosts: "globe", redirects: "redirect", zones: "zone", dyndns: "refresh", ddnshosts: "refresh",
-    activity: "t_activity", alerts: "t_bell", schedbackups: "t_cloudup", updates: "t_update", autossl: "t_autossl",
+    activity: "t_activity", isolation: "t_isolate", dockerapps: "t_docker", alerts: "t_bell", schedbackups: "t_cloudup", updates: "t_update", autossl: "t_autossl",
     visitors: "visitors", errors: "errors", bandwidth: "gauge", rawaccess: "rawlog", analytics: "chart", resources: "dashboard",
     ssh: "key", ipblocker: "ban", ssl: "lock", panelhttps: "lock", tokens: "token", hotlink: "link",
     leech: "trap", modsec: "shield", security: "phone", fixperms: "home", virus: "virus",
@@ -585,7 +587,7 @@
     indexes: "Indexes", mime: "MIME Types", errorpages: "Error Pages", handlers: "Apache Handlers",
     virus: "Virus Scanner", dns: "Track DNS",
     ssh: "SSH Access", ipblocker: "IP Blocker & Trust", ssl: "SSL/TLS Certificates", tokens: "Manage API Tokens",
-    hotlink: "Hotlink Protection", redirects: "Redirects", modsec: "WAF Firewall", activity: "Activity Log", alerts: "Alerts", schedbackups: "Scheduled Backups", updates: "Updates", autossl: "AutoSSL", ddnshosts: "Dynamic DNS", visitors: "Visitors", errors: "Errors", bandwidth: "Bandwidth", rawaccess: "Raw Access", analytics: "Analytics", resources: "Resource Usage", leech: "Fail2ban",
+    hotlink: "Hotlink Protection", redirects: "Redirects", modsec: "WAF Firewall", activity: "Activity Log", isolation: "Site Isolation", dockerapps: "Docker Apps", alerts: "Alerts", schedbackups: "Scheduled Backups", updates: "Updates", autossl: "AutoSSL", ddnshosts: "Dynamic DNS", visitors: "Visitors", errors: "Errors", bandwidth: "Bandwidth", rawaccess: "Raw Access", analytics: "Analytics", resources: "Resource Usage", leech: "Fail2ban",
     fixperms: "Fix Home Permissions", vhosts: "Domains", dyndns: "Dynamic DNS Updater", zones: "Zone Editor",
     mysql: "Manage Databases", mysqlwiz: "MariaDB Wizard", pgsql: "PostgreSQL Databases",
     pgwiz: "PostgreSQL Wizard",
@@ -725,7 +727,7 @@
     vhosts: ["web"], redirects: ["web"], hotlink: ["web"], indexes: ["web"], mime: ["web"], errorpages: ["web"],
     handlers: ["web"], dirprivacy: ["web"], webdisk: ["web"], phpver: ["web"],
     appstore: ["web", "mariadb"], app: ["web", "mariadb"], wordpress: ["web", "mariadb"],
-    modsec: ["web", "modsecurity"], autossl: { need: ["web"], soft: ["certbot"] }, visitors: ["web"], analytics: ["web"], rawaccess: ["web"], ddnshosts: { soft: ["bind9"] }, ssl: { need: ["web"], soft: ["certbot"] },
+    modsec: ["web", "modsecurity"], dockerapps: ["docker"], autossl: { need: ["web"], soft: ["certbot"] }, visitors: ["web"], analytics: ["web"], rawaccess: ["web"], ddnshosts: { soft: ["bind9"] }, ssl: { need: ["web"], soft: ["certbot"] },
     mysql: ["mariadb"], mysqlwiz: ["mariadb"], pgsql: ["postgresql"], pgwiz: ["postgresql"],
     ftpaccounts: ["ftp"], git: ["git"], cron: ["cron"], virus: ["clamav"], firewall: ["ufw"], leech: ["fail2ban"],
     zones: { soft: ["bind9"] },
@@ -914,6 +916,7 @@
       { label: "Hotlink Protection", icon: "link", view: "hotlink" },
       { label: "Fail2ban", icon: "trap", view: "leech" },
       { label: "WAF Firewall", icon: "shield", view: "modsec" },
+      { label: "Site Isolation", icon: "t_isolate", view: "isolation" },
       { label: "Two-Factor Authentication", icon: "phone", view: "security" },
       { label: "Activity Log", icon: "t_activity", view: "activity" },
       { label: "Fix Home Permissions", icon: "home", view: "fixperms" },
@@ -951,6 +954,7 @@
     ]},
     { name: "Applications", icon: "apps", tiles: [
       { label: "App Installer", icon: "apps", view: "appstore" },
+      { label: "Docker Apps", icon: "t_docker", view: "dockerapps" },
       { label: "WordPress", icon: "wordpress", view: "wordpress" },
       { label: "System Applications", icon: "services", view: "sysapps" },
       { label: "Application Manager", icon: "packages", view: "appmgr" },

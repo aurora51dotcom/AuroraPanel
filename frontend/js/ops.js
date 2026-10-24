@@ -484,5 +484,169 @@ window.AuroraOps = (ui) => {
     load();
   }
 
-  return { activity: viewActivity, alerts: viewAlerts, schedbackups: viewSchedBackups, updates: viewUpdates, autossl: viewAutoSSL };
+  // ======================================================================
+  //  Security → Site Isolation
+  // ======================================================================
+  async function viewIsolation(root) {
+    root.append(pageHead("Site Isolation", "Give every website its own locked room: its PHP runs as its own user and can only open its own files. A hacked plugin on one site can then no longer read the others' files or database passwords. Uses almost no memory — a site's PHP only runs while it's being visited."));
+    const prog = progressBox();
+    const log = el("pre", { class: "log op-log", hidden: "" });
+    const body = el("div", {}, el("div", { class: "loading", text: "Loading…" }));
+    root.append(prog.node, log, body);
+    let d;
+    async function load() {
+      try { d = await API.isolation(); } catch (e) { body.innerHTML = ""; body.append(el("p", { class: "empty", text: e.message })); return; }
+      draw();
+    }
+    async function watch(id, label) {
+      log.hidden = false;
+      const j = await waitJob(id, (j) => { prog.set(j); log.textContent = j.output || ""; log.scrollTop = 1e9; });
+      if (j) toast(j.status === "done" ? label : "Something went wrong — see the log", j.status === "done" ? "good" : "bad");
+      load();
+    }
+    function draw() {
+      body.innerHTML = "";
+      const on = d.sites.filter((s) => s.on).length;
+      body.append(el("div", { class: `card mx-hero ${!d.sites.length ? "" : on === d.sites.length ? "good" : on ? "warn" : "bad"}` }, [
+        el("div", { class: "mx-hero-ico" }, icon("shield", 28)),
+        el("div", { class: "mx-hero-txt" }, [el("h3", { text: !d.sites.length ? "No websites yet" : on === d.sites.length ? `All ${on} sites are isolated` : `${on} of ${d.sites.length} sites isolated` }),
+          el("p", { class: "muted", text: `PHP ${d.php || "?"} · ${d.fpm ? "PHP-FPM ready" : "PHP-FPM is installed the first time you isolate a site"}. The panel's own tools (phpMyAdmin, webmail) keep working as before.` })]),
+        el("div", { class: "mx-hero-act" }, [d.sites.length && on < d.sites.length ? btn("Isolate all sites", () => call(() => API.isolationOn(""), "Isolating…", (r) => watch(r.job, "Every site is isolated")), "btn-primary") : null]),
+      ]));
+      if (!d.sites.length) return;
+      body.append(card("Your sites", [el("div", { class: "op-isos" }, d.sites.map((s) => el("div", { class: `op-iso ${s.on ? "on" : ""}` }, [
+        el("span", { class: "em-rcard-ico" }, icon(s.on ? "lock" : "globe", 18)),
+        el("div", { class: "grow" }, [el("b", { text: s.site }), el("p", { class: "muted mx-small mx-ell", text: s.on ? `PHP runs as ${s.user} · folder ${s.docroot} closed to other sites${s.ram ? ` · ${fmtBytes(s.ram)} in use now` : " · idle"}` : `Shares PHP with every other site (www-data) · ${s.docroot}` })]),
+        s.on ? pill(s.socket_ok ? "isolated" : "isolated · pool not running", s.socket_ok ? "good" : "warn") : pill("shared"),
+        s.on ? btn("Fix permissions", () => call(() => API.isolationFix(s.site), "Ownership re-applied — PHP can write its files again"), "btn-ghost") : null,
+        s.on ? armed("Turn off", "Click again", () => call(() => API.isolationOff(s.site), `${s.site} shares PHP again`, load), "btn-ghost")
+          : btn("Isolate", () => call(() => API.isolationOn(s.site), "Isolating…", (r) => watch(r.job, `${s.site} is isolated`)), "btn-primary"),
+      ])))]),
+      el("p", { class: "muted mx-small mx-p", text: "Uploaded a site as root (File Manager, a restore)? “Fix permissions” gives the files back to the site so it can update itself. Some old plugins that run shell commands (exec, system) won't work while isolated — that's exactly what attackers use." }));
+    }
+    load();
+  }
+
+  // ======================================================================
+  //  Applications → Docker Apps
+  // ======================================================================
+  const APP_HUE = (s) => { let h = 0; for (const c of String(s)) h = (h * 31 + c.charCodeAt(0)) % 360; return h; };
+  async function viewDockerApps(root) {
+    root.append(pageHead("Docker Apps", "Self-hosted apps in one click — smart home, media server, password manager, ad blocking, monitoring. Each runs in its own container, kept apart from the rest of the server, and is reached at its own web address with HTTPS."));
+    const prog = progressBox();
+    const log = el("pre", { class: "log op-log", hidden: "" });
+    const body = el("div", {}, el("div", { class: "loading", text: "Loading…" }));
+    root.append(prog.node, log, body);
+    let d, cat = "All";
+    async function load() {
+      try { d = await API.docker(); } catch (e) { body.innerHTML = ""; body.append(el("p", { class: "empty", text: e.message })); return; }
+      draw();
+    }
+    async function watch(id, label) {
+      log.hidden = false; prog.node.scrollIntoView({ block: "nearest" });
+      const j = await waitJob(id, (j) => { prog.set(j); log.textContent = j.output || ""; log.scrollTop = 1e9; });
+      if (j) toast(j.status === "done" ? label : "Something went wrong — see the log", j.status === "done" ? "good" : "bad");
+      load();
+    }
+    const host = (u) => u.replace("{host}", location.hostname);
+    function appCard(a) {
+      const up = a.state === "running";
+      const url = a.url ? host(a.url) : "";
+      return el("div", { class: "op-dapp" }, [
+        el("div", { class: "op-dapp-h" }, [el("span", { class: "op-dapp-ico", style: `--h:${APP_HUE(a.app)}`, text: a.title[0] }),
+          el("div", { class: "grow" }, [el("b", { text: a.title }), el("p", { class: "muted mx-small", text: `${a.name}${a.cpu ? ` · CPU ${a.cpu}` : ""}${a.mem && !a.mem.startsWith("0B") ? ` · ${a.mem.split("/")[0].trim()}` : ""}` })]),
+          pill(up ? "running" : a.state, up ? "good" : a.state === "missing" ? "bad" : "dim")]),
+        url ? el("a", { class: "op-dapp-url", href: url, target: "_blank", rel: "noopener", text: url.replace(/\/$/, "") + " ↗" }) : el("p", { class: "muted mx-small", text: "No web page (service only)" }),
+        a.note ? el("p", { class: "muted mx-small", text: a.note }) : null,
+        el("div", { class: "op-dapp-act" }, [
+          up ? btn("Stop", () => call(() => API.dockerCtl(a.name, "stop"), `${a.title} stopped`, load), "btn-ghost") : btn("Start", () => call(() => API.dockerCtl(a.name, "start"), `${a.title} started`, load), "btn-primary"),
+          btn("Restart", () => call(() => API.dockerCtl(a.name, "restart"), "Restarted", load), "btn-ghost"),
+          btn("Update", () => call(() => API.dockerCtl(a.name, "update"), "Updating…", (r) => watch(r.job, `${a.title} is up to date`)), "btn-ghost"),
+          btn("Logs", async () => {
+            const r = await call(() => API.dockerLogs(a.name));
+            if (!r) return;
+            openModal(`${a.title} — logs`, el("pre", { class: "mx-pre", style: "max-height:65vh", text: r.text || "(empty)" }), []); modalWide();
+            const pre = document.querySelector("#modal pre"); if (pre) pre.scrollTop = 1e9;
+          }, "btn-ghost"),
+          a.secrets.length ? btn("Passwords", async () => {
+            const rows = [];
+            for (const k of a.secrets) {
+              const r = await call(() => API.dockerSecret(a.name, k));
+              if (r) rows.push(el("div", { class: "em-copy" }, [el("span", { class: "em-copy-k", text: k }), el("code", { class: "em-mono", text: r.value }),
+                el("button", { type: "button", class: "bk-mini", text: "Copy", onclick: async () => toast(await copyText(r.value) ? "Copied" : "Copy failed", "good") })]));
+            }
+            openModal(`${a.title} — generated passwords`, el("div", { class: "em-form" }, rows), []); modalWide();
+          }, "btn-ghost") : null,
+          btn("Remove…", () => removeApp(a), "btn-ghost"),
+        ]),
+      ]);
+    }
+    function draw() {
+      body.innerHTML = "";
+      if (!d.running) body.append(el("div", { class: "mx-note" }, [icon("warning", 16), el("span", { text: "Docker is installed but not running — System Applications → Docker → Start." })]));
+      if (d.apps.length) {
+        body.append(card(`Your apps (${d.apps.length})`, [el("div", { class: "op-dapps" }, d.apps.map(appCard))], "",
+          [d.disk && d.disk.Images ? el("span", { class: "muted mx-small", text: `Images use ${d.disk.Images.size}` }) : null,
+            btn("Clean up", () => call(() => API.dockerPrune(), "").then((r) => r && toast(`Freed ${r.reclaimed}`, "good")), "btn-ghost")]));
+      }
+      const cats = ["All", ...new Set(d.catalog.map((x) => x.cat))];
+      const grid = el("div", { class: "op-cat" });
+      const drawGrid = () => {
+        grid.innerHTML = "";
+        d.catalog.filter((x) => cat === "All" || x.cat === cat).forEach((x) => grid.append(el("div", { class: "op-capp" }, [
+          el("div", { class: "op-dapp-h" }, [el("span", { class: "op-dapp-ico", style: `--h:${APP_HUE(x.id)}`, text: x.name[0] }),
+            el("div", { class: "grow" }, [el("b", { text: x.name }), el("p", { class: "muted mx-small", text: `${x.cat} · ${x.ram}` })])]),
+          el("p", { class: "op-capp-d", text: x.desc }),
+          el("div", { class: "op-dapp-act" }, [btn("Install", () => installDlg(x), "btn-primary"),
+            x.home ? el("a", { class: "btn btn-sm btn-ghost", href: x.home, target: "_blank", rel: "noopener noreferrer", text: "Website ↗" }) : null]),
+        ])));
+      };
+      body.append(card("App catalog", [el("div", { class: "op-catbar" }, seg(cats.map((c) => [c, c]), cat, (v) => { cat = v; drawGrid(); })), grid],
+        "", [el("span", { class: "muted mx-small", text: `${d.arch} · images match this processor` })]));
+      drawGrid();
+    }
+    function removeApp(a) {
+      const del = el("input", { type: "checkbox" });
+      openModal(`Remove ${a.title}?`, el("div", { class: "em-form" }, [el("p", { text: `The container stops and is removed${a.domain ? `, and the web address ${a.domain} is taken down` : ""}.` }),
+        el("label", { class: "dm-check" }, [del, el("span", { text: "Also delete its data (settings, databases, uploads) — can't be undone" })])]),
+        [armed("Remove", "Click again to remove", () => call(() => API.dockerRemove(a.name, del.checked), `${a.title} removed`, () => { closeModal(); load(); }), "btn-danger")]);
+    }
+    function installDlg(x) {
+      let access = (x.host_network || x.no_web) ? (d.lan_ip ? "lan" : "public") : "proxy";
+      const name = el("input", { type: "text", value: x.id, maxlength: 31 });
+      const domain = el("input", { type: "text", placeholder: `${x.id}.example.com` });
+      const domWrap = el("div", {}, field("Web address", domain, "A name whose DNS points to this server (e.g. a subdomain in the Zone Editor). AutoSSL then gives it HTTPS."));
+      const opts = [];
+      if (!x.host_network && !x.no_web) opts.push({ value: "proxy", label: "At a web address (recommended)", icon: "globe", desc: "https://app.yourdomain — HTTPS, protected by the WAF and your ban list. The app itself is never exposed directly." });
+      if (d.lan_ip) opts.push({ value: "lan", label: "On my local network only", icon: "wifi", desc: `http://${d.lan_ip}:<port> — reachable from devices at home, not from the internet.` });
+      opts.push({ value: "public", label: "On a public port", icon: "warning", desc: "Anyone on the internet can reach it directly — Docker skips the firewall for these ports. Only for apps with their own strong login.", tone: "warn" });
+      const rc = el("div", { class: "em-rcards" });
+      opts.forEach((o) => {
+        const r = el("input", { type: "radio", name: "acc", value: o.value });
+        r.checked = o.value === access;
+        r.onchange = () => { access = o.value; domWrap.hidden = access !== "proxy"; };
+        rc.append(el("label", { class: `em-rcard ${o.tone || ""}` }, [r, el("span", { class: "em-rcard-ico" }, icon(o.icon, 18)),
+          el("div", {}, [el("div", { class: "em-rcard-t" }, el("b", { text: o.label })), el("p", { class: "muted", text: o.desc })])]));
+      });
+      domWrap.hidden = access !== "proxy";
+      const folders = {};
+      const fold = x.folders.map((f) => {
+        folders[f] = el("input", { type: "text", placeholder: `/srv/${f} (empty = a folder inside the app)` });
+        return field(`Your ${f} folder`, folders[f], f === "media" || f === "music" ? "Where your files already are — the app reads them from here." : "");
+      });
+      openModal(`Install ${x.name}`, el("div", { class: "em-form" }, [
+        el("p", { class: "muted", text: x.desc }),
+        x.note ? el("div", { class: "mx-note" }, [icon("info", 16), el("span", { text: x.note })]) : null,
+        x.host_network ? el("div", { class: "mx-note mx-note-dim" }, [icon("info", 16), el("span", { text: `${x.name} needs the host network (to find devices at home), so it's reached at http://<this server>:${x.ports[0].port}.` })]) : null,
+        field("Name", name, "Lowercase letters, digits and dashes — install the same app twice with different names."),
+        el("div", { class: "mx-sub" }, "How to reach it"), rc, domWrap, ...fold,
+      ]), [el("button", { class: "btn btn-primary", text: "Install", onclick: () => call(() => API.dockerInstall({ app: x.id, name: name.value.trim(), access, domain: domain.value.trim(),
+        folders: Object.fromEntries(Object.entries(folders).map(([k, i]) => [k, i.value.trim()]).filter(([, v]) => v)) }), "Installing…", (r) => { closeModal(); watch(r.job, `${x.name} is running`); }) })]);
+      modalWide();
+    }
+    load();
+  }
+
+  return { activity: viewActivity, alerts: viewAlerts, schedbackups: viewSchedBackups, updates: viewUpdates, autossl: viewAutoSSL, isolation: viewIsolation,
+    dockerapps: viewDockerApps };
 };
