@@ -175,7 +175,7 @@ window.AuroraExtras = (ui) => {
     return wrap;
   }
   async function banIp(ip, reason) {
-    return call(() => API.guardBan(ip, reason, 24 * 3600), `${ip} banned for 24 hours`);
+    return call(() => API.guardBan(ip, reason, 24 * 3600, document.title.split(" · ")[0]), `${ip} banned for 24 hours`);
   }
 
   // ---------------------------------------------------------------- one IP, in the panel
@@ -195,7 +195,7 @@ window.AuroraExtras = (ui) => {
       const stPill = st.status === "banned" ? pill(st.kind === "fail2ban" ? `banned by fail2ban (${(st.jails || []).join(", ") || "jail"})` : "banned", "bad")
         : st.status === "trusted" ? pill("trusted", "good") : pill("not banned");
       const banLine = st.status === "banned" ? (st.kind === "manual"
-        ? `Banned ${st.created ? ago(st.created) : ""}${st.cidr && st.cidr !== ip && st.cidr !== ip + "/32" ? ` as part of ${st.cidr}` : ""}${st.reason ? ` — “${st.reason}”` : ""}. ${st.expires ? `Lifts ${new Date(st.expires * 1000).toLocaleString()}.` : "Until you unban it."}`
+        ? `Banned ${st.created ? ago(st.created) : ""}${st.source ? ` from ${st.source}` : ""}${st.cidr && st.cidr !== ip && st.cidr !== ip + "/32" ? ` as part of ${st.cidr}` : ""}${st.reason ? ` — “${st.reason}”` : ""}. ${st.expires ? `Lifts ${new Date(st.expires * 1000).toLocaleString()}.` : "Until you unban it."}`
         : `fail2ban banned it automatically${st.expires_in ? `, lifts in ${dur(st.expires_in)}` : ""}.`) + " It can't reach anything on this server: websites, mail, SSH, FTP, VPN and this panel."
         : st.status === "trusted" ? `Trusted${st.cidr && st.cidr !== ip && st.cidr !== ip + "/32" ? ` (via ${st.cidr})` : ""}${st.reason ? ` — “${st.reason}”` : ""}: it is never banned.` : "";
       body.append(el("div", { class: "mx-ip-head" }, [
@@ -242,7 +242,7 @@ window.AuroraExtras = (ui) => {
       else if (st.status !== "trusted") {
         const dsel = el("select", { class: "em-select mx-narrow" }, DURATIONS.map(([v, l]) => el("option", { value: v, text: l })));
         dsel.value = "86400";
-        foot.append(el("div", { class: "mx-ban" }, [dsel, btn("Ban", () => act(() => API.guardBan(ip, `Panel: ${w.hits} requests, ${d.waf.events} WAF events, ${d.logins_failed} failed logins`, +dsel.value || null), `${ip} banned`), "btn-danger")]));
+        foot.append(el("div", { class: "mx-ban" }, [dsel, btn("Ban", () => act(() => API.guardBan(ip, `${w.hits} requests, ${d.waf.events} WAF events, ${d.logins_failed} failed logins`, +dsel.value || null, `IP card · ${document.title.split(" · ")[0]}`), `${ip} banned`), "btn-danger")]));
       }
       if (st.status === "trusted") foot.append(btn("Remove from trusted", () => act(() => API.guardUntrust(st.cidr || ip), `${ip} no longer trusted`), "btn-ghost"));
       else if (st.status !== "banned") foot.append(btn("Trust", () => act(() => API.guardTrust(ip, "Trusted from the IP card"), `${ip} trusted — it will never be banned`), "btn-ghost"));
@@ -1076,5 +1076,6 @@ window.AuroraExtras = (ui) => {
   return {
     modsec: viewWaf, ddnshosts: viewDdnsHosts, visitors: viewVisitors, errors: viewErrors, bandwidth: viewBandwidth,
     rawaccess: viewRawAccess, analytics: viewAnalytics, resources: viewResources,
+    _ui: { el, pageHead, empty, call, armed, seg, tile, card, chart, rank, donut, sortableTable, ipCard, t2s, num, dur, LS, niceMax },
   };
 };

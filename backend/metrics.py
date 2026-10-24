@@ -1219,7 +1219,8 @@ def ip_info(ip: str, days: int = 7) -> dict:
         g = guard.listing()
         for b in g["bans"]:
             if a in ipaddress.ip_network(b["cidr"]):
-                state.update(kind="manual", cidr=b["cidr"], reason=b.get("reason", ""), expires=b.get("expires"), created=b.get("created"))
+                state.update(kind="manual", cidr=b["cidr"], reason=b.get("reason", ""), expires=b.get("expires"), created=b.get("created"),
+                             source=b.get("source", ""))
         for f in g["fail2ban"]:
             if f["ip"] == ip:
                 state.update(kind="fail2ban", jails=f["jails"], expires_in=f["expires_in"])

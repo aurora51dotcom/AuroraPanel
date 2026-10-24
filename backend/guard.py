@@ -17,6 +17,7 @@ the address of the admin doing the banning, or anything trusted."""
 from __future__ import annotations
 
 import ipaddress
+import re
 import json
 import shutil
 import subprocess
@@ -278,7 +279,7 @@ def _covers(a, b) -> bool:
 
 
 # ---------------------------------------------------------------- actions
-def ban(target: str, reason: str = "", duration: int | None = None, client_ip: str | None = None) -> dict:
+def ban(target: str, reason: str = "", duration: int | None = None, client_ip: str | None = None, source: str = "") -> dict:
     ensure()
     n = _net(target)
     for p, why in _protected_nets(client_ip):
@@ -301,7 +302,8 @@ def ban(target: str, reason: str = "", duration: int | None = None, client_ip: s
     if duration is not None and not 60 <= duration <= 10 * 365 * 86400:
         raise GuardError("Duration must be between 1 minute and 10 years")
     entry = {"cidr": str(n), "reason": (reason or "").strip()[:120], "created": int(time.time()),
-             "expires": int(time.time()) + duration if duration else None}
+             "expires": int(time.time()) + duration if duration else None,
+             "source": re.sub(r"[^\w &·/().,-]", "", source or "")[:60] or "IP Blocker"}  # the panel page it was banned from
     el = _elem(n) + (f" timeout {duration}s" if duration else "")
     _run([_nft(), "add", "element", "inet", "aurora_guard", f"ban{_fam(n)}", "{ " + el + " }"])
     s["bans"].append(entry)

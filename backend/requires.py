@@ -259,6 +259,12 @@ COMPONENTS: dict[str, dict] = {
         "check": lambda: _mail().dav_installed(),
         "post": lambda: _mail().setup_dav(),
     },
+    "rclone": {
+        "name": "rclone", "icon": "backup", "size": "about 20 MB",
+        "desc": "Copies backups to cloud storage: S3, Cloudflare R2, Backblaze B2, SFTP, WebDAV/Nextcloud, Google Drive and more.",
+        "pkgs": ["rclone"],
+        "check": lambda: shutil.which("rclone", path=PATH) is not None,
+    },
     "composer": {
         "name": "Composer", "icon": "packages", "size": "about 2 MB",
         "desc": "PHP's package manager, used by Laravel, Symfony and other frameworks.",

@@ -64,6 +64,11 @@
   //  SVG line icons (Lucide-style)
   // ======================================================================
   const ICONS = {
+    t_activity: '<path d="M3 5h11M3 12h7M3 19h9"/><circle cx="17.5" cy="15.5" r="4.5"/><path d="M17.5 13.3v2.4l1.6 1"/>',
+    t_bell: '<path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"/><path d="M10 20.5a2 2 0 0 0 4 0"/><path d="M12 3v2"/>',
+    t_cloudup: '<path d="M7 18.5a4.6 4.6 0 0 1-.7-9.1A6.2 6.2 0 0 1 18.2 8.3 4.1 4.1 0 0 1 18 16.5"/><path d="M12 20.5v-9"/><polyline points="9 14.5 12 11.5 15 14.5"/>',
+    t_update: '<path d="M20.5 12a8.5 8.5 0 1 1-2.5-6"/><polyline points="21 3.5 21 8.5 16 8.5"/><path d="M12 8v5l3 2"/>',
+    t_autossl: '<path d="M12 2.5 4 5.5v6c0 5 3.4 8.7 8 10 4.6-1.3 8-5 8-10v-6z"/><rect x="8.8" y="11" width="6.4" height="5" rx="1"/><path d="M10 11V9.8a2 2 0 0 1 4 0V11"/>',
     t_dbweb: '<ellipse cx="9" cy="5.5" rx="6" ry="2.5"/><path d="M3 5.5v10c0 1.4 2.7 2.5 6 2.5"/><path d="M15 5.5V10"/><path d="M3 10.5c0 1.4 2.7 2.5 6 2.5"/><path d="m14 13 7.5 2.8-3.2 1.2-1.2 3.3z"/>',
     t_dbnew: '<ellipse cx="10" cy="5.5" rx="6.5" ry="2.5"/><path d="M3.5 5.5v11c0 1.4 2.9 2.5 6.5 2.5"/><path d="M16.5 5.5v5"/><path d="M3.5 11c0 1.4 2.9 2.5 6.5 2.5"/><path d="M18.5 14v7M15 17.5h7"/>',
     t_table: '<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M3 9.5h18M3 14.8h18M9.5 9.5V20"/>',
@@ -218,6 +223,7 @@
     packages: "packages", network: "network", firewall: "firewall", users: "users",
     mysql: "database", mysqlwiz: "wizard", pgsql: "database", pgwiz: "wizard",
     vhosts: "globe", redirects: "redirect", zones: "zone", dyndns: "refresh", ddnshosts: "refresh",
+    activity: "t_activity", alerts: "t_bell", schedbackups: "t_cloudup", updates: "t_update", autossl: "t_autossl",
     visitors: "visitors", errors: "errors", bandwidth: "gauge", rawaccess: "rawlog", analytics: "chart", resources: "dashboard",
     ssh: "key", ipblocker: "ban", ssl: "lock", panelhttps: "lock", tokens: "token", hotlink: "link",
     leech: "trap", modsec: "shield", security: "phone", fixperms: "home", virus: "virus",
@@ -579,7 +585,7 @@
     indexes: "Indexes", mime: "MIME Types", errorpages: "Error Pages", handlers: "Apache Handlers",
     virus: "Virus Scanner", dns: "Track DNS",
     ssh: "SSH Access", ipblocker: "IP Blocker & Trust", ssl: "SSL/TLS Certificates", tokens: "Manage API Tokens",
-    hotlink: "Hotlink Protection", redirects: "Redirects", modsec: "WAF Firewall", ddnshosts: "Dynamic DNS", visitors: "Visitors", errors: "Errors", bandwidth: "Bandwidth", rawaccess: "Raw Access", analytics: "Analytics", resources: "Resource Usage", leech: "Fail2ban",
+    hotlink: "Hotlink Protection", redirects: "Redirects", modsec: "WAF Firewall", activity: "Activity Log", alerts: "Alerts", schedbackups: "Scheduled Backups", updates: "Updates", autossl: "AutoSSL", ddnshosts: "Dynamic DNS", visitors: "Visitors", errors: "Errors", bandwidth: "Bandwidth", rawaccess: "Raw Access", analytics: "Analytics", resources: "Resource Usage", leech: "Fail2ban",
     fixperms: "Fix Home Permissions", vhosts: "Domains", dyndns: "Dynamic DNS Updater", zones: "Zone Editor",
     mysql: "Manage Databases", mysqlwiz: "MariaDB Wizard", pgsql: "PostgreSQL Databases",
     pgwiz: "PostgreSQL Wizard",
@@ -705,7 +711,7 @@
       git: viewGit,
       inodes: viewInodes,
       about: viewAbout,
-    }[view] || mailViews()[view] || extraViews()[view] || viewDashboard);
+    }[view] || mailViews()[view] || extraViews()[view] || opsViews()[view] || viewDashboard);
     if (VIEW_NEEDS[view]) requireGate(root, view, VIEW_NEEDS[view], render);
     else render(root);
   }
@@ -719,7 +725,7 @@
     vhosts: ["web"], redirects: ["web"], hotlink: ["web"], indexes: ["web"], mime: ["web"], errorpages: ["web"],
     handlers: ["web"], dirprivacy: ["web"], webdisk: ["web"], phpver: ["web"],
     appstore: ["web", "mariadb"], app: ["web", "mariadb"], wordpress: ["web", "mariadb"],
-    modsec: ["web", "modsecurity"], visitors: ["web"], analytics: ["web"], rawaccess: ["web"], ddnshosts: { soft: ["bind9"] }, ssl: { need: ["web"], soft: ["certbot"] },
+    modsec: ["web", "modsecurity"], autossl: { need: ["web"], soft: ["certbot"] }, visitors: ["web"], analytics: ["web"], rawaccess: ["web"], ddnshosts: { soft: ["bind9"] }, ssl: { need: ["web"], soft: ["certbot"] },
     mysql: ["mariadb"], mysqlwiz: ["mariadb"], pgsql: ["postgresql"], pgwiz: ["postgresql"],
     ftpaccounts: ["ftp"], git: ["git"], cron: ["cron"], virus: ["clamav"], firewall: ["ufw"], leech: ["fail2ban"],
     zones: { soft: ["bind9"] },
@@ -903,11 +909,13 @@
       { label: "IP Blocker & Trust", icon: "ban", view: "ipblocker" },
       { label: "Panel HTTPS", icon: "lock", view: "panelhttps" },
       { label: "SSL/TLS Certificates", icon: "lock", view: "ssl" },
+      { label: "AutoSSL", icon: "t_autossl", view: "autossl" },
       { label: "Manage API Tokens", icon: "token", view: "tokens" },
       { label: "Hotlink Protection", icon: "link", view: "hotlink" },
       { label: "Fail2ban", icon: "trap", view: "leech" },
       { label: "WAF Firewall", icon: "shield", view: "modsec" },
       { label: "Two-Factor Authentication", icon: "phone", view: "security" },
+      { label: "Activity Log", icon: "t_activity", view: "activity" },
       { label: "Fix Home Permissions", icon: "home", view: "fixperms" },
       { label: "Antivirus", icon: "virus", view: "virus" },
     ]},
@@ -920,6 +928,7 @@
       { label: "FTP Accounts", icon: "folder", view: "ftpaccounts" },
       { label: "Backup", icon: "backup", view: "backups" },
       { label: "Backup Wizard", icon: "wizard", view: "backupwiz" },
+      { label: "Scheduled Backups", icon: "t_cloudup", view: "schedbackups" },
       { label: "Git Version Control", icon: "git", view: "git" },
       { label: "Inodes Usage", icon: "indexes", view: "inodes" },
     ]},
@@ -935,6 +944,8 @@
     { name: "System", icon: "services", tiles: [
       { label: "Services", icon: "services", view: "services" },
       { label: "Packages", icon: "packages", view: "packages" },
+      { label: "Updates", icon: "t_update", view: "updates" },
+      { label: "Alerts", icon: "t_bell", view: "alerts" },
       { label: "Firewall", icon: "firewall", view: "firewall" },
       { label: "Users", icon: "users", view: "users" },
     ]},
@@ -4331,7 +4342,7 @@
     const go = btn("Ban", async () => {
       go.disabled = true;
       try {
-        const r = await API.guardBan(target.value.trim(), reason.value.trim(), +dur.value || null);
+        const r = await API.guardBan(target.value.trim(), reason.value.trim(), +dur.value || null, TITLES[state.view] || state.view);
         closeModal(); toast(`Banned ${r.ban.cidr}${r.replaced.length ? ` (replaced ${r.replaced.length} narrower ban${r.replaced.length > 1 ? "s" : ""})` : ""}`, "good"); done && done();
       } catch (e) { toast(e.message, "bad"); go.disabled = false; }
     }, "btn-danger");
@@ -4360,13 +4371,13 @@
       body.innerHTML = "";
       if (!d.enabled) body.append(el("p", { class: "dm-hint", text: "The ban list is created the first time you ban or trust something." }));
       body.append(el("h2", { class: "section-title", text: `Banned by you (${d.bans.length})` }));
-      body.append(d.bans.length ? simpleTable(["Address / range", "Reason", "Expires", "Blocked packets", ""], d.bans.map((b) => row(
-        el("code", { class: "net-mono", text: b.cidr }), b.reason || "—", b.expires ? `${new Date(b.expires * 1000).toLocaleString()} (in ${fmtDur(b.expires - Date.now() / 1000)})` : "never",
+      body.append(d.bans.length ? simpleTable(["Address / range", "Banned from", "Reason", "Expires", "Blocked packets", ""], d.bans.map((b) => row(
+        el("code", { class: "net-mono", text: b.cidr }), el("span", { class: "pill dim", text: b.source || "IP Blocker" }), b.reason || "—", b.expires ? `${new Date(b.expires * 1000).toLocaleString()} (in ${fmtDur(b.expires - Date.now() / 1000)})` : "never",
         b.packets, el("div", { class: "net-actions" }, [btn("Unban", async () => { try { await API.guardUnban(b.cidr); toast(`${b.cidr} unbanned`, "good"); load(); } catch (e) { toast(e.message, "bad"); } })]),
       ))) : el("p", { class: "empty", text: "No manual bans." }));
       body.append(el("h2", { class: "section-title", text: `Banned by fail2ban (${d.fail2ban.length})` }));
       body.append(d.fail2ban.length ? simpleTable(["Address", "Caught by", "Time left", "Blocked packets", ""], d.fail2ban.map((a) => row(
-        el("code", { class: "net-mono", text: a.ip }), a.jails.join(", ") || "fail2ban", a.expires_in ? fmtDur(a.expires_in) : "until unbanned", a.packets,
+        el("code", { class: "net-mono", text: a.ip }), el("span", { class: "pill warn", text: `fail2ban · ${a.jails.join(", ") || "jail"}` }), a.expires_in ? fmtDur(a.expires_in) : "until unbanned", a.packets,
         el("div", { class: "net-actions" }, [
           btn("Unban", async () => { try { await API.guardUnban(a.ip); toast(`${a.ip} unbanned`, "good"); load(); } catch (e) { toast(e.message, "bad"); } }),
           btn("Ban permanently", () => banDialog(a.ip, load), "btn-ghost")]),
@@ -8012,6 +8023,16 @@
     }
     function render() { drawSteps(); content.innerHTML = ""; [stepWhere, stepDetails, stepInstall][step](); drawFoot(); }
     (async () => { try { st = await appStatus(); } catch (e) {} render(); })();
+  }
+
+  // ---- Activity log, alerts, scheduled backups, updates, AutoSSL… (frontend/js/ops.js) ----
+  let OPSV = null;
+  function opsViews() {
+    if (!OPSV && window.AuroraOps) {
+      OPSV = window.AuroraOps({ el, $, icon, btn, pill, kv, field, sw, toast, API, navigate, state, openModal, closeModal, copyText, fmtBytes, ago, downloadText, esc,
+        requireCard, jobPanel, ...(extraViews()._ui || {}), el });
+    }
+    return OPSV || {};
   }
 
   // ---- WAF, Dynamic DNS and Metrics views (frontend/js/extras.js) ----

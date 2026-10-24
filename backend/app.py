@@ -25,7 +25,7 @@ from starlette.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel
 
 from . import (
-    abuse, antivirus, apache, apitokens, appmanager, auth, backups, config, cron,
+    abuse, alerts, antivirus, audit, autossl, schedules, tasks, updates, apache, apitokens, appmanager, auth, backups, config, cron,
     apps, databases, diskusage, dnszones, domains, fail2ban, netmgr, sites, files, firewall, ipblocker, jobs,
     metrics, modsecurity, netdiag, waf, packages, perms, phpmgr, services, sslcerts, sshaccess,
     sysapps, system_info, terminal, twofa, users,
@@ -71,6 +71,7 @@ class _GZipFrontend(GZipMiddleware):
 
 
 app.add_middleware(_GZipFrontend, minimum_size=1024)
+app.add_middleware(audit.AuditMiddleware)
 
 
 @app.middleware("http")
@@ -173,6 +174,7 @@ def _auth_log(ok: bool, username: str, request: Request):
     The username is JSON-encoded so it can't inject fake log lines."""
     ip = request.client.host if request.client else "?"
     print(f"aurora-auth: {'ok' if ok else 'fail'} user={json.dumps(username[:64])} ip={ip}", flush=True)
+    audit.record(username[:64], ip, "login" if ok else "login failed", ok=ok, status=200 if ok else 401, method="POST", path="/api/login")
 
 
 # Per-IP login throttle (fail2ban still bans at the firewall; this works without it).
@@ -264,6 +266,11 @@ def api_logout():
     resp = JSONResponse({"ok": True})
     resp.delete_cookie(auth.COOKIE_NAME, path="/")
     return resp
+
+
+@app.get("/api/audit")
+def api_audit(days: int = 30, q: str = "", user: str = "", failed: bool = False, limit: int = 2000, _u: str = auth.CurrentUser):
+    return audit.entries(max(1, min(days, 400)), q, user, failed, max(1, min(limit, 20000)))
 
 
 @app.get("/api/me")
@@ -2932,6 +2939,7 @@ class GuardBody(BaseModel):
     target: str
     reason: str | None = None
     duration: int | None = None
+    source: str | None = None
 
 
 class F2BBody(BaseModel):
@@ -2951,7 +2959,7 @@ def api_guard(user: str = auth.CurrentUser):
 
 @app.post("/api/guard/ban")
 def api_guard_ban(body: GuardBody, request: Request, user: str = auth.CurrentUser):
-    return _guard_call(lambda: guard.ban(body.target, body.reason or "", body.duration, _client_ip(request)))
+    return _guard_call(lambda: guard.ban(body.target, body.reason or "", body.duration, _client_ip(request), body.source or ""))
 
 
 @app.post("/api/guard/unban")
@@ -3406,6 +3414,207 @@ def _met_call(fn):
 @app.on_event("startup")
 def _metrics_start():
     metrics.start()
+    try:
+        tasks.ensure_timer()
+    except Exception as exc:  # never block the panel from starting
+        print(f"aurora: task timer not installed: {exc}", flush=True)
+
+
+# --------------------------------------------------------------------------- #
+# Alerts
+# --------------------------------------------------------------------------- #
+def _alert_call(fn):
+    try:
+        return fn()
+    except alerts.AlertError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/alerts")
+def api_alerts(user: str = auth.CurrentUser):
+    return {**alerts.public(), "tasks": tasks.status()}
+
+
+@app.post("/api/alerts")
+def api_alerts_save(body: dict, user: str = auth.CurrentUser):
+    return _alert_call(lambda: alerts.update(body))
+
+
+@app.post("/api/alerts/test")
+def api_alerts_test(user: str = auth.CurrentUser):
+    return _alert_call(alerts.test)
+
+
+@app.post("/api/alerts/check")
+def api_alerts_check(user: str = auth.CurrentUser):
+    return _alert_call(lambda: {**alerts.check(), **alerts.public()})
+
+
+# --------------------------------------------------------------------------- #
+# Scheduled (off-site) backups
+# --------------------------------------------------------------------------- #
+def _sch_call(fn):
+    try:
+        return fn()
+    except (schedules.ScheduleError, backups.BackupError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/schedules")
+def api_sch(user: str = auth.CurrentUser):
+    return schedules.listing()
+
+
+@app.post("/api/schedules/plans")
+def api_sch_plan(body: dict, user: str = auth.CurrentUser):
+    return _sch_call(lambda: schedules.save_plan(body))
+
+
+@app.delete("/api/schedules/plans/{pid}")
+def api_sch_plan_del(pid: str, user: str = auth.CurrentUser):
+    return _sch_call(lambda: schedules.delete_plan(pid))
+
+
+@app.post("/api/schedules/plans/{pid}/run")
+def api_sch_run(pid: str, user: str = auth.CurrentUser):
+    return _sch_call(lambda: schedules.start(pid))
+
+
+@app.get("/api/schedules/plans/{pid}/log")
+def api_sch_log(pid: str, name: str = "", user: str = auth.CurrentUser):
+    return _sch_call(lambda: schedules.run_log(pid, name))
+
+
+@app.get("/api/schedules/plans/{pid}/snapshots")
+def api_sch_snaps(pid: str, user: str = auth.CurrentUser):
+    return _sch_call(lambda: schedules.snapshots(pid))
+
+
+class FetchBody(BaseModel):
+    dest: str = ""
+    name: str
+
+
+@app.post("/api/schedules/plans/{pid}/fetch")
+def api_sch_fetch(pid: str, body: FetchBody, user: str = auth.CurrentUser):
+    return _sch_call(lambda: schedules.fetch(pid, body.dest, body.name))
+
+
+@app.get("/api/schedules/plans/{pid}/passphrase")
+def api_sch_pass(pid: str, user: str = auth.CurrentUser):
+    return _sch_call(lambda: {"passphrase": schedules.passphrase(pid)})
+
+
+@app.post("/api/schedules/destinations")
+def api_sch_dest(body: dict, user: str = auth.CurrentUser):
+    return _sch_call(lambda: schedules.save_destination(body))
+
+
+@app.delete("/api/schedules/destinations/{did}")
+def api_sch_dest_del(did: str, user: str = auth.CurrentUser):
+    return _sch_call(lambda: schedules.delete_destination(did))
+
+
+@app.post("/api/schedules/destinations/{did}/test")
+def api_sch_dest_test(did: str, user: str = auth.CurrentUser):
+    return _sch_call(lambda: schedules.test_destination(did))
+
+
+# --------------------------------------------------------------------------- #
+# System updates
+# --------------------------------------------------------------------------- #
+def _upd_call(fn):
+    try:
+        r = fn()
+        return {"job": r.id} if hasattr(r, "id") else r
+    except updates.UpdateError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/updates")
+def api_upd(user: str = auth.CurrentUser):
+    return updates.status()
+
+
+@app.post("/api/updates/refresh")
+def api_upd_refresh(user: str = auth.CurrentUser):
+    return _upd_call(lambda: {**updates.refresh(), **updates.status()})
+
+
+class UpdInstallBody(BaseModel):
+    packages: list[str] = []
+
+
+@app.post("/api/updates/install")
+def api_upd_install(body: UpdInstallBody, user: str = auth.CurrentUser):
+    return _upd_call(lambda: updates.install(body.packages))
+
+
+class UpdAutoBody(BaseModel):
+    enabled: bool
+    mode: str = "security"
+    reboot: bool = False
+    reboot_time: str = "04:00"
+
+
+@app.post("/api/updates/auto")
+def api_upd_auto(body: UpdAutoBody, user: str = auth.CurrentUser):
+    return _upd_call(lambda: updates.set_auto(body.enabled, body.mode, body.reboot, body.reboot_time))
+
+
+class RebootBody(BaseModel):
+    minutes: int = 1
+    cancel: bool = False
+
+
+@app.post("/api/updates/reboot")
+def api_upd_reboot(body: RebootBody, user: str = auth.CurrentUser):
+    return _upd_call(lambda: updates.cancel_reboot() if body.cancel else updates.reboot(body.minutes))
+
+
+# --------------------------------------------------------------------------- #
+# AutoSSL
+# --------------------------------------------------------------------------- #
+def _assl_call(fn):
+    try:
+        return fn()
+    except (autossl.AutoSSLError, dnszones.ZoneError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/autossl")
+def api_assl(user: str = auth.CurrentUser):
+    return autossl.status()
+
+
+class AutoSSLBody(BaseModel):
+    enabled: bool | None = None
+    email: str | None = None
+    agreed: bool | None = None
+    exclude: list[str] | None = None
+
+
+@app.post("/api/autossl")
+def api_assl_save(body: AutoSSLBody, user: str = auth.CurrentUser):
+    return _assl_call(lambda: autossl.settings(body.enabled, body.email, body.agreed, body.exclude))
+
+
+class AutoSSLRunBody(BaseModel):
+    only: str = ""
+
+
+@app.post("/api/autossl/run")
+def api_assl_run(body: AutoSSLRunBody, user: str = auth.CurrentUser):
+    return _assl_call(lambda: autossl.start(True, body.only))
+
+
+class WildcardBody(BaseModel):
+    domain: str
+
+
+@app.post("/api/autossl/wildcard")
+def api_assl_wild(body: WildcardBody, user: str = auth.CurrentUser):
+    return _assl_call(lambda: autossl.issue_wildcard(body.domain))
 
 
 @app.get("/api/metrics/sites")
