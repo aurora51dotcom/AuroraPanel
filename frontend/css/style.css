@@ -168,8 +168,8 @@ select option { background: var(--glass-solid); }
 .am-host { color: var(--text-dim); font-size: 12.5px; margin-bottom: 10px; word-break: break-all; }
 
 /* pill tabs */
-.tabs-row { padding: 16px 34px 4px; display: flex; align-items: center; gap: 12px; }
-.tabs { display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; flex: 1; padding: 2px; }
+.tabs-row { padding: 16px 34px 4px; display: flex; align-items: flex-start; gap: 12px; }
+.tabs { display: flex; flex-wrap: wrap; gap: 4px; flex: 1; min-width: 0; padding: 2px; }
 .tabs::-webkit-scrollbar { display: none; }
 .tab {
   flex: none; padding: 9px 16px; border-radius: 999px; border: 1px solid transparent; background: transparent;
@@ -1029,6 +1029,9 @@ pre.log { background: rgba(0,0,0,0.35); border: 1px solid var(--stroke); border-
   .net-kv > div { grid-template-columns: 1fr; gap: 2px; }
 }
 .net-kv .pill { justify-self: start; }
+.net-kv > div:has(> .pill) { align-items: center; }
+/* a button row right after a key/value list needs air */
+.net-kv + .toolbar, .net-kv + .dm-note, .net-kv + p { margin-top: 14px; }
 .net-pw { position: relative; min-width: 0; }
 .net-pw input { width: 100%; min-width: 0; padding-right: 76px; box-sizing: border-box; }
 .net-pw-btns { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); display: flex; gap: 2px; }
@@ -1551,6 +1554,10 @@ button.em-stat:hover { border-color: var(--accent); }
 .em-tool:hover { border-color: var(--accent); background: var(--accent-soft); }
 .em-tool-ico { width: 34px; height: 34px; flex: none; border-radius: 10px; display: grid; place-items: center; background: var(--accent-soft); color: var(--accent); }
 
+.em-local-tips { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 4px 0 12px; }
+.em-local-tips > div { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; border: 1px solid var(--stroke); border-radius: 14px; font-size: 13px; }
+@media (max-width: 640px) { .em-local-tips { grid-template-columns: 1fr; } }
+
 /* forwarders / trace */
 .em-arrow { color: var(--text-faint); }
 .em-dests { display: flex; gap: 6px; flex-wrap: wrap; flex: 1; min-width: 0; }
@@ -1662,3 +1669,13 @@ button.em-stat:hover { border-color: var(--accent); }
 }
 /* stacked cards on Email pages breathe */
 #view-root > .card + .card, #view-root > .card + div > .card:first-child, #view-root > div > .card + .card, #view-root > div > .card + div > .card:first-child { margin-top: 16px; }
+
+/* Databases: "Create database" and "Create user" side by side in one panel */
+.db-create { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); padding: 0; overflow: hidden; margin-bottom: 16px; }
+.db-create > .db-form { padding: 22px 24px; display: flex; flex-direction: column; }
+.db-create > .db-form + .db-form { border-left: 1px solid var(--stroke); }
+.db-create > .db-form > .btn { align-self: flex-start; margin-top: auto; }
+@media (max-width: 900px) {
+  .db-create { grid-template-columns: 1fr; }
+  .db-create > .db-form + .db-form { border-left: none; border-top: 1px solid var(--stroke); }
+}

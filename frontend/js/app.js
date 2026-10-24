@@ -4578,6 +4578,50 @@
     return el("span", { class: `pill ${cls}`, title: exp ? `Expires ${exp.toLocaleDateString()}` : "", text: label + (days != null ? ` · ${days}d` : "") });
   }
 
+  // Domains this server knows without a website: mail-only domains and DNS-only zones.
+  async function otherDomains(box, sitesData, reload) {
+    const [mailD, zones] = await Promise.all([API.mailDomains().catch(() => null), API.dnsZones().catch(() => null)]);
+    const siteNames = new Set();
+    (sitesData.sites || []).forEach((x) => [x.server_name, ...(x.aliases || [])].forEach((n) => n && siteNames.add(n.toLowerCase())));
+    const map = new Map();
+    const add = (d, k, extra) => { if (siteNames.has(d)) return; const e = map.get(d) || { domain: d }; e[k] = extra || true; map.set(d, e); };
+    (mailD ? mailD.domains : []).forEach((d) => add(d.domain, "mail", d));
+    (zones ? zones.zones : []).forEach((z) => add(z.domain, "zone", z));
+    box.innerHTML = "";
+    if (!map.size) return;
+    const rows = [...map.values()].sort((a, b) => a.domain.localeCompare(b.domain));
+    box.append(el("div", { class: "card", style: "margin-top:16px" }, [
+      el("h3", { text: "Domains without a website" }),
+      el("p", { class: "muted", style: "margin:0 0 12px", text: "Domains this server handles mail or DNS for, but no site. Remove them here when you no longer need them." }),
+      el("div", { class: "table-wrap" }, el("table", { class: "dm-table" }, [
+        el("thead", {}, el("tr", {}, ["Domain", "Used for", "Actions"].map((h) => el("th", { text: h })))),
+        el("tbody", {}, rows.map((r) => {
+          const accounts = r.mail && r.mail.accounts ? r.mail.accounts : 0;
+          const rm = btn("Remove", async (e) => {
+            const b = e.currentTarget;
+            if (!b.classList.contains("armed")) { b.classList.add("armed"); b.textContent = "Click again to remove"; setTimeout(() => { b.classList.remove("armed"); b.textContent = "Remove"; }, 4000); return; }
+            b.disabled = true;
+            try {
+              if (r.mail) await API.mailDomainRemove(r.domain);
+              if (r.zone) await API.dnsZoneDelete(r.domain);
+              toast(`${r.domain} removed`, "good"); reload();
+            } catch (err) { toast(err.message, "bad"); b.disabled = false; b.classList.remove("armed"); b.textContent = "Remove"; }
+          }, "btn-ghost");
+          return el("tr", {}, [
+            el("td", {}, el("b", { text: r.domain })),
+            el("td", {}, el("div", { style: "display:flex;gap:6px;flex-wrap:wrap" }, [
+              r.mail ? pill(`Email${accounts ? ` · ${accounts} account${accounts === 1 ? "" : "s"}` : ""}`, "good") : null,
+              r.zone ? pill("DNS zone", "dim") : null].filter(Boolean))),
+            el("td", { class: "actions" }, [
+              r.mail ? btn("Email", () => { state.mailDomain = r.domain; navigate("mailaccounts"); }, "btn-ghost") : null,
+              r.zone ? btn("Zone", () => navigate("zones"), "btn-ghost") : null,
+              accounts ? el("span", { class: "muted", style: "font-size:12px", text: "Delete its email accounts to remove it" }) : rm].filter(Boolean)),
+          ]);
+        })),
+      ])),
+    ]));
+  }
+
   function viewDomains(root) {
     if (domState.manage) { const n = domState.manage; domState.manage = null; return viewDomainManage(root, n); }
     const bar = el("div", { class: "dm-bar" });
@@ -4690,9 +4734,12 @@
       return box;
     }
     let folders = { sites: [] };
+    const otherBox = el("div");
+    root.append(otherBox);
     const load = async () => { await guardedLoad(async () => {
       [data, folders] = await Promise.all([API.sites(), API.folderSites().catch(() => ({ sites: [] }))]);
       render();
+      otherDomains(otherBox, data, load);
     }); };
     search.addEventListener("input", render);
     applyBtn.addEventListener("click", async () => {
@@ -5783,10 +5830,47 @@
       if (status === "trusted") return el("div", { class: "net-actions" }, [pill("trusted", "good")]);
       if (status === "banned") return el("div", { class: "net-actions" }, [pill("banned", "bad"),
         btn("Unban", async () => { try { await API.guardUnban(ip); toast(`${ip} unbanned`, "good"); load(); } catch (e) { toast(e.message, "bad"); } }, "btn-ghost")]);
-      return el("div", { class: "net-actions" }, [btn("Ban", () => banDialog(ip, load), "btn-danger"), btn("Trust", () => trustDialog(ip, load), "btn-ghost")]);
+      const rep = reported[ip];
+      return el("div", { class: "net-actions" }, [
+        scope === "internet" ? (rep ? pill("reported", "warn") : btn("Report", (e) => reportIp(ip, e.currentTarget), "btn-ghost")) : null,
+        btn("Ban", () => banDialog(ip, load), "btn-danger"), btn("Trust", () => trustDialog(ip, load), "btn-ghost")].filter(Boolean));
+    }
+    let reported = {};
+    // Report to the network's abuse contact, sent by this server's mail from the remembered account.
+    async function reportIp(ip, button) {
+      let p;
+      if (button) { button.disabled = true; button.textContent = "Looking up…"; }
+      try { p = await API.abusePreview(ip); }
+      catch (e) { toast(e.message, "bad"); if (button) { button.disabled = false; button.textContent = "Report"; } return; }
+      if (button) { button.disabled = false; button.textContent = "Report"; }
+      if (!p.mail_ready) { toast("Reports go out through this server's mail — set up Email first", "bad"); return; }
+      if (!p.info.contacts.length) { toast(`No abuse contact is published for ${ip}`, "bad"); return; }
+      const send = async (sender) => {
+        try {
+          const r = await API.abuseReport({ ip, sender });
+          toast(`Reported ${ip} to ${r.to.join(", ")} (from ${r.from})`, "good");
+          reported[ip] = { to: r.to }; closeModal(); load();
+        } catch (e) { toast(e.message, "bad"); }
+      };
+      if (p.from && !p.reported) return send("");  // one click: the sender is remembered
+      const from = el("select", {}, p.accounts.map((a) => el("option", { value: a, text: a })));
+      if (p.from) from.value = p.from;
+      openModal(`Report ${ip}`, el("div", { class: "em-form" }, [
+        kv([["Network", `${p.info.network || "—"}${p.info.country ? ` (${p.info.country})` : ""}`], ["Abuse contact", p.info.contacts.join(", ")],
+          ["Evidence", `${p.events} failed login${p.events === 1 ? "" : "s"} in the last 7 days`]]),
+        p.reported ? el("div", { class: "dm-note" }, [icon("info", 15), el("span", { text: `Already reported to ${p.reported.to.join(", ")} — sending again repeats the report.` })]) : null,
+        p.accounts.length ? field("Send from", from, "Remembered for next time — later reports go out with one click.")
+          : el("p", { class: "empty", text: "Create an email account first (Email → Email Accounts)." }),
+        el("h4", { class: "em-sub", text: "The message" }), el("pre", { class: "log", style: "max-height:260px", text: p.body }),
+      ].filter(Boolean)), p.accounts.length ? [el("button", { class: "btn btn-primary", text: "Send report", onclick: async (e) => {
+        e.currentTarget.disabled = true;
+        try { const r = await API.abuseReport({ ip, sender: from.value, force: !!p.reported }); toast(`Reported ${ip} to ${r.to.join(", ")}`, "good"); reported[ip] = { to: r.to }; closeModal(); load(); }
+        catch (err) { toast(err.message, "bad"); e.currentTarget.disabled = false; }
+      } })] : []);
     }
     const load = () => guardedLoad(async () => {
       const d = await API.netmon(hours, scope);
+      try { reported = await API.abuseReported(); } catch (e) { reported = {}; }
       ctrl.innerHTML = "";
       ctrl.append(...[
         el("div", { class: "net-card-h" }, [icon("radar", 20), el("h3", { text: "Connection logging" }), el("span", { style: "flex:1" }),
@@ -6182,7 +6266,7 @@
 
     function createCards(d) {
       const dbName = el("input", { type: "text", placeholder: "myapp", style: "min-width:0" });
-      const dbCard = el("div", { class: "card db-form" }, [
+      const dbCard = el("div", { class: "db-form" }, [
         el("h3", { text: "Create database" }),
         field("Name", dbName, "Letters, digits and underscore. Created with utf8mb4 (full Unicode, emoji included)."),
         btn("Create database", async () => {
@@ -6196,7 +6280,7 @@
       const uDb = el("select", {}, [el("option", { value: "", text: "— none —" }),
         ...d.databases.filter((x) => !x.system && !x.app).map((x) => el("option", { value: x.name, text: x.name }))]);
       const uAdmin = dbChk("Admin", false, "every privilege on every database; use for phpMyAdmin");
-      const userCard = el("div", { class: "card db-form" }, [
+      const userCard = el("div", { class: "db-form" }, [
         el("h3", { text: "Create user" }),
         field("Username", uName),
         field("Allow connections from", uHost, MY_HOST_HINT),
@@ -6209,7 +6293,7 @@
             `User ${user} created${uDb.value ? ` with access to ${uDb.value}` : ""}`)) { uName.value = ""; uPw.input.value = ""; }
         }, "btn-primary"),
       ]);
-      return el("div", { class: "db-grid" }, [dbCard, userCard]);
+      return el("div", { class: "card db-create" }, [dbCard, userCard]);
     }
 
     function manageDb(db, d) {
@@ -6487,7 +6571,7 @@
       const dbName = el("input", { type: "text", placeholder: "myapp", style: "min-width:0" });
       const dbOwner = el("select", {}, [el("option", { value: "", text: "postgres (default)" }),
         ...owners.filter((r) => !r.system).map((r) => el("option", { value: r.name, text: r.name }))]);
-      const dbCard = el("div", { class: "card db-form" }, [
+      const dbCard = el("div", { class: "db-form" }, [
         el("h3", { text: "Create database" }),
         field("Name", dbName, "Letters, digits and underscore."),
         field("Owner", dbOwner, "The owner has full control. Pick the user your app logs in with."),
@@ -6501,7 +6585,7 @@
       const cdb = chk("Can create databases"), csu = chk("Superuser", false, "full admin; use for phpPgAdmin");
       const uDb = el("select", {}, [el("option", { value: "", text: "— none —" }),
         ...d.databases.filter((x) => !x.system).map((x) => el("option", { value: x.name, text: x.name }))]);
-      const userCard = el("div", { class: "card db-form" }, [
+      const userCard = el("div", { class: "db-form" }, [
         el("h3", { text: "Create user" }),
         field("Username", uName),
         field("Password", uPw.node, "Save it somewhere — it can be changed later but not shown again."),
@@ -6517,7 +6601,7 @@
           } catch (e) { toast(e.message, "bad"); load(); }
         }, "btn-primary"),
       ]);
-      return el("div", { class: "db-grid" }, [dbCard, userCard]);
+      return el("div", { class: "card db-create" }, [dbCard, userCard]);
     }
 
     function manageDb(db, d) {
@@ -7272,7 +7356,7 @@
           el("span", { class: "about-logo", html: POLAR_BEAR }),
           el("div", {}, [el("h2", { text: "AuroraPanel" }), el("div", { class: "about-ver" }, [pill(a.label, "warn"), el("span", { class: "muted", text: ` released ${a.released}` })])]),
         ]),
-        el("p", { class: "muted", text: "A free, open-source (MIT) hobby control panel for the Raspberry Pi. This is a beta — things may break, so please report anything odd." }),
+        el("p", { class: "muted", text: "A free, open-source (MIT) control panel for the Raspberry Pi and Ubuntu / Debian servers. Found something odd? Please report it." }),
         kv([["Version", a.version], ["Installed in", a.install_dir], ["Website", el("a", { href: a.site, target: "_blank", rel: "noopener noreferrer", text: "aurora51.com ↗" })]]),
         el("div", { class: "toolbar", style: "margin:16px 0 0" }, [check, viewChanges,
           el("a", { class: "btn btn-sm btn-ghost", href: REDDIT_URL, target: "_blank", rel: "noopener noreferrer", text: "Feedback on Reddit ↗" }),
@@ -7297,25 +7381,57 @@
       async function installUpdate(r, box) {
         if (!confirmInline(`Install ${r.latest_label} now?\n\nThe panel restarts during the update (about a minute). Your admin account, settings, VPNs and sites are kept, and the previous version is restored automatically if the new one doesn't start.`)) return;
         box.innerHTML = "";
-        const pre = el("pre", { class: "log", text: "Downloading and verifying the release…" });
+        const pre = el("pre", { class: "log ax-log", text: "Downloading and verifying the release…", hidden: true });
         const title = el("h4", { text: `Installing ${r.latest_label}…` });
-        box.append(title, pre);
-        try { await API.aboutUpdate(); }
-        catch (e) { title.textContent = "Update not started"; pre.textContent = e.message; return; }
+        // The orange bar follows the installer's milestones (the log has the details).
+        const STEPS = [[/updating AuroraPanel/, 8, "Preparing"], [/Backing up/, 14, "Backing up the current version"], [/Copying the new files/, 22, "Copying the new files"],
+          [/Checking system packages/, 32, "Checking system packages"], [/Setting up Python environment/, 42, "Setting up Python"], [/Dependencies installed/, 66, "Python packages installed"],
+          [/Writing \/etc\/systemd/, 74, "Updating the service"], [/Service enabled/, 82, "Restarting the panel"], [/Waiting for AuroraPanel/, 88, "Waiting for the panel to start"],
+          [/Panel is up|is installed/, 95, "New version running"]];
+        const bar = el("div", { class: "ax-bar" }, el("span"));
+        const stage = el("div", { class: "ax-stage" });
+        const logBtn = el("button", { type: "button", class: "bk-mini", text: "Show log", onclick: () => { pre.hidden = !pre.hidden; logBtn.textContent = pre.hidden ? "Show log" : "Hide log"; } });
+        const prog = el("div", { class: "ax-progress" }, [el("div", { class: "ax-prog-top" }, [stage, logBtn]), bar]);
+        let pct = 3, label = "Downloading and verifying the release";
         const started = Date.now();
+        const draw = (done) => {
+          bar.firstChild.style.width = `${pct}%`;
+          stage.innerHTML = "";
+          stage.append(done ? el("span", { class: `bk-badge ${done === "ok" ? "good" : "bad"}`, text: done === "ok" ? "✓" : "!" }) : el("span", { class: "bk-spin" }),
+            el("b", { text: label }), el("span", { class: "bk-pct", text: `${Math.floor(pct)}%` }),
+            el("span", { class: "muted", text: ` · ${Math.floor((Date.now() - started) / 60000)}:${String(Math.floor((Date.now() - started) / 1000) % 60).padStart(2, "0")}` }));
+        };
+        box.append(title, prog, pre);
+        try { await API.aboutUpdate(); }
+        catch (e) { title.textContent = "Update not started"; prog.classList.add("bad"); label = e.message; draw("bad"); pre.textContent = e.message; return; }
+        draw();
         const t = setInterval(async () => {
           try {
             const s = await API.aboutUpdateStatus();
-            if (s.log.length) pre.textContent = s.log.join("\n");
+            if (s.log.length) {
+              pre.textContent = s.log.join("\n");
+              for (const [rx, p, l] of STEPS) if (s.log.some((x) => rx.test(x)) && p > pct) { pct = p; label = l; }
+            }
             pre.scrollTop = pre.scrollHeight;
             if (s.version === r.latest) {
               clearInterval(t); title.textContent = `Updated to ${r.latest_label}`;
+              pct = 100; label = `Updated to ${r.latest_label} — reloading`; prog.classList.add("ok"); draw("ok");
               toast(`Updated to ${r.latest_label} — reloading`, "good");
               setTimeout(() => location.reload(), 1500);
+              return;
             } else if (!s.running && s.log.some((l) => l.startsWith("✖"))) {
               clearInterval(t); title.textContent = "Update failed — the previous version was kept";
+              prog.classList.add("bad"); label = "Update failed — the previous version was kept"; draw("bad");
+              pre.hidden = false; logBtn.textContent = "Hide log";
+              return;
             }
-          } catch (e) { pre.textContent = pre.textContent.replace(/\n?… panel restarting$/, "") + "\n… panel restarting"; }
+            draw();
+          } catch (e) {
+            // The panel is restarting into the new version: keep the bar moving gently.
+            if (pct < 96) { pct = Math.max(pct, 88) + 0.5; label = "Panel restarting into the new version"; }
+            draw();
+            pre.textContent = pre.textContent.replace(/\n?… panel restarting$/, "") + "\n… panel restarting";
+          }
           if (Date.now() - started > 6 * 60 * 1000) {
             clearInterval(t); title.textContent = "Still not done after 6 minutes";
             pre.textContent += "\nCheck it over SSH: sudo journalctl -u aurorapanel-update  (log: /var/lib/aurora/updates/update.log)";

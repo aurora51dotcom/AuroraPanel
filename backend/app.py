@@ -25,7 +25,7 @@ from starlette.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel
 
 from . import (
-    antivirus, apache, apitokens, appmanager, auth, backups, config, cron,
+    abuse, antivirus, apache, apitokens, appmanager, auth, backups, config, cron,
     apps, databases, diskusage, dnszones, domains, fail2ban, netmgr, sites, files, firewall, ipblocker, jobs,
     modsecurity, netdiag, packages, perms, phpmgr, services, sslcerts, sshaccess,
     sysapps, system_info, terminal, twofa, users,
@@ -2533,6 +2533,55 @@ def api_mail_dav_share(body: DavBody, user: str = auth.CurrentUser):
 @app.post("/api/mail/dav/unshare")
 def api_mail_dav_unshare(body: DavBody, user: str = auth.CurrentUser):
     return _mail(mail.unshare_collection, body.owner, body.id, body.with_)
+
+
+class MailLocalBody(BaseModel):
+    enabled: bool = True
+
+
+@app.post("/api/mail/local")
+def api_mail_local(body: MailLocalBody, user: str = auth.CurrentUser):
+    return _mail(mail.enable_local, body.enabled)
+
+
+class TrackSettingsBody(BaseModel):
+    days: int | None = None
+    clear: bool = False
+
+
+@app.post("/api/mail/track/settings")
+def api_mail_track_settings(body: TrackSettingsBody, user: str = auth.CurrentUser):
+    return _mail(mail.set_track_settings, body.days, body.clear)
+
+
+class AbuseBody(BaseModel):
+    ip: str
+    sender: str = ""
+    to: str = ""
+    note: str = ""
+    force: bool = False
+
+
+def _abuse(fn, *a):
+    try:
+        return fn(*a)
+    except (abuse.AbuseError, mail.MailError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/abuse/preview")
+def api_abuse_preview(ip: str, user: str = auth.CurrentUser):
+    return _abuse(abuse.preview, ip)
+
+
+@app.get("/api/abuse/reported")
+def api_abuse_reported(user: str = auth.CurrentUser):
+    return abuse.reported()
+
+
+@app.post("/api/abuse/report")
+def api_abuse_report(body: AbuseBody, user: str = auth.CurrentUser):
+    return _abuse(abuse.report, body.ip, body.sender, body.to, body.note, body.force)
 
 
 @app.post("/api/mail/test")

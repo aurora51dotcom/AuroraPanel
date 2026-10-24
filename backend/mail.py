@@ -158,7 +158,7 @@ def _default_state() -> dict:
             "autoresponders": {}, "filters": {"global": []}, "lists": {},
             "spam": {"enabled": True, "threshold": 5, "junk": True, "autodelete": False, "delete_threshold": 12,
                      "allow": [], "block": [], "greylist": False, "per_user": {}},
-            "tls": {"source": "self"}, "dav_shares": []}
+            "tls": {"source": "self"}, "dav_shares": [], "track": {"days": 30, "cleared": 0}}
 
 
 def load() -> dict:
@@ -234,6 +234,65 @@ def candidate_domains() -> list[str]:
     return sorted(out)
 
 
+LOCAL_PCRE = PF_DIR / "transport_local.pcre"
+# Bump when postfix_settings()/postfix_services() change, so existing servers pick them up on the next apply().
+CONFIG_REV = 3
+
+
+def _write_local_pcre() -> None:
+    _write(LOCAL_PCRE, HEADER + "# Mail for another device on the local network goes straight to it (found by mDNS).\n"
+                       "/^(.+\\.local)$/ smtp:[$1]\n", 0o644)
+
+
+def _upgrade_config(s: dict) -> None:
+    _write_local_pcre()
+    cert, key = _tls_paths(s)
+    for k, v in postfix_settings(hostname(s), cert, key).items():
+        _run(["postconf", "-e", f"{k}={v}"])
+    for name, entry, params in postfix_services():
+        _run(["postconf", "-M", f"{name}={entry}"])
+        for p in params:
+            _run(["postconf", "-P", f"{name}/{p}"])
+    s["config_rev"] = CONFIG_REV
+    save(s)
+
+
+def is_local(d: str) -> bool:
+    return d.endswith(".local")
+
+
+def local_domain_name() -> str:
+    """This device's own name on the local network (what avahi/mDNS answers): <hostname>.local."""
+    short = re.sub(r"[^a-z0-9-]", "-", socket.gethostname().split(".")[0].lower()).strip("-") or "server"
+    return f"{short}.local"
+
+
+def local_status() -> dict:
+    s = load()
+    name = local_domain_name()
+    mdns = _run(["systemctl", "is-active", "--quiet", "avahi-daemon"]).returncode == 0
+    return {"domain": name, "enabled": name in s["domains"], "mdns": mdns,
+            "accounts": sorted(a for a in s["accounts"] if a.endswith("@" + name))}
+
+
+def enable_local(on: bool = True) -> dict:
+    """Mail without the internet: <hostname>.local for apps on this machine (admin@ns1.local),
+    and for other AuroraPanel servers on the same network (they're found by their .local name)."""
+    _require()
+    s = load()
+    name = local_domain_name()
+    if on:
+        dom = _ensure_domain(s, name)
+        dom.update(routing="local", routing_set=True, local=True)
+    else:
+        if any(a.endswith("@" + name) for a in s["accounts"]):
+            raise MailError(f"Delete the accounts on {name} first")
+        s["domains"].pop(name, None)
+    save(s)
+    apply(s)
+    return local_status()
+
+
 def add_domain(d: str) -> dict:
     _require()
     s = load()
@@ -245,17 +304,25 @@ def add_domain(d: str) -> dict:
 
 
 def remove_domain(d: str) -> dict:
+    """Stop handling mail for a domain. Mailboxes must be deleted first (so no mail is lost by
+    accident); its mailing lists, forwarders and settings go with it. The DKIM key is kept, so
+    re-adding the domain doesn't break the published DNS record."""
     s = load()
     d = _domain(d)
-    used = [a for a in s["accounts"] if a.endswith("@" + d)] + [a for a in s["lists"] if a.endswith("@" + d)]
-    if used:
-        raise MailError(f"Remove the {len(used)} account(s)/list(s) on {d} first")
+    if d not in s["domains"]:
+        raise MailError(f"{d} isn't a mail domain")
+    accounts = [a for a in s["accounts"] if a.endswith("@" + d)]
+    if accounts:
+        raise MailError(f"Delete the {len(accounts)} email account(s) on {d} first")
+    lists = [a for a in s["lists"] if a.endswith("@" + d)]
+    fwd = [k for k in s["forwarders"] if k.endswith("@" + d)]
     s["domains"].pop(d, None)
-    s["forwarders"] = {k: v for k, v in s["forwarders"].items() if not k.endswith("@" + d)}
+    s["lists"] = {k: v for k, v in s["lists"].items() if k not in lists}
+    s["forwarders"] = {k: v for k, v in s["forwarders"].items() if k not in fwd}
     s["domain_forwarders"].pop(d, None)
     save(s)
     apply(s)
-    return {"ok": True}
+    return {"ok": True, "removed_lists": len(lists), "removed_forwarders": len(fwd)}
 
 
 def set_routing(d: str, routing: str) -> dict:
@@ -279,8 +346,8 @@ def _effective_routing(d: str, dom: dict) -> str:
     """auto: this server receives the domain's mail when its best MX points here (or there's
     no MX yet), keeps a backup copy when a lower-priority MX does, and otherwise sends it on."""
     r = dom.get("routing", "auto")
-    if r != "auto":
-        return r
+    if r != "auto" or is_local(d):
+        return "local" if is_local(d) else r
     mx = _mx(d)
     if not mx:
         return "local"
@@ -1091,6 +1158,7 @@ def render_postfix(s: dict) -> dict[str, str]:
                     {r.split()[0] for r in recip}
             recip += [f"{k} DUNNO" for k in sorted(known) if k.endswith("@" + d) and not any(r.startswith(k + " ") for r in recip)]
             recip.append(f"{d} REJECT {msg}")
+    transport += [f"{d} lmtp:unix:private/dovecot-lmtp" for d in local if is_local(d)]
     transport.append("discard.aurora.invalid discard:")
     logins = [f"{k} {', '.join(sorted(v))}" for k, v in sorted(login.items())]
     return {"domains": "\n".join(f"{d} OK" for d in local), "relay_domains": "\n".join(f"{d} OK" for d in relay),
@@ -1162,6 +1230,9 @@ def apply(s: dict | None = None) -> dict:
     if not configured():
         return {"ok": False}
     changed = set()
+    if s.get("config_rev") != CONFIG_REV:
+        _upgrade_config(s)
+        changed.add("postfix-maps")
     for name, text in render_postfix(s).items():
         p = PF_DIR / name
         if _write(p, HEADER + text + "\n", 0o640, "root", "postfix") or not Path(str(p) + ".db").exists():
@@ -1249,6 +1320,7 @@ def status() -> dict:
     if inst and configured():
         st["queue"] = len(_queue())
         st["detected"] = detect_hostname(s)
+        st["local"] = local_status()
         st["tls"] = _tls_info(s)
         st["dovecot_version"] = _run(["dovecot", "--version"]).stdout.strip()
     return st
@@ -1316,6 +1388,9 @@ def setup(log, host: str | None = None) -> dict:
         for p in params:
             _run(["postconf", "-P", f"{name}/{p}"])
     _write(Path("/etc/mailname"), host + "\n")
+    _write_local_pcre()
+    s["config_rev"] = CONFIG_REV
+    save(s)
     # Mailing lists run as vmail through this script.
     _write(LIB_DIR / "list.py", (Path(__file__).parent / "mail_list.py").read_text(), 0o755)
     # Autoconfig for Thunderbird & co.
@@ -1523,7 +1598,9 @@ def postfix_settings(host: str, cert: str, key: str) -> dict:
         "inet_interfaces": "all", "inet_protocols": "all", "recipient_delimiter": "+",
         "virtual_mailbox_domains": f"{m}/domains", "virtual_mailbox_maps": f"{m}/mailboxes",
         "virtual_alias_maps": f"{m}/aliases", "virtual_transport": "lmtp:unix:private/dovecot-lmtp",
-        "transport_maps": f"{m}/transport", "relay_domains": f"{m}/relay_domains",
+        "transport_maps": f"{m}/transport, pcre:{LOCAL_PCRE}", "relay_domains": f"{m}/relay_domains",
+        # [name.local] is looked up with the system resolver too, so other devices are found by mDNS.
+        "smtp_host_lookup": "dns, native",
         "smtpd_sender_login_maps": f"{m}/sender_login",
         "smtpd_sasl_type": "dovecot", "smtpd_sasl_path": "private/auth", "smtpd_sasl_auth_enable": "no",
         "smtpd_tls_cert_file": cert, "smtpd_tls_key_file": key, "smtpd_tls_security_level": "may",
@@ -1542,6 +1619,8 @@ def postfix_settings(host: str, cert: str, key: str) -> dict:
         "milter_mail_macros": "i {mail_addr} {client_addr} {client_name} {auth_authen}",
         "message_size_limit": "52428800", "mailbox_size_limit": "0", "biff": "no",
         "append_dot_mydomain": "no", "smtputf8_enable": "yes",
+        # Local programs (sendmail) often write UTF-8 headers; don't demand SMTPUTF8 for those — Dovecot's LMTP doesn't offer it.
+        "smtputf8_autodetect_classes": "bounce",
         "auroralist_destination_recipient_limit": "1",
     }
 
@@ -1639,7 +1718,7 @@ def detect_hostname(s: dict | None = None) -> dict:
     ip = _public_ip()
     ptr = _ptr(ip)
     here = lambda h: bool(ip and ip in _a(h))
-    doms = sorted(s["domains"], key=lambda d: (not any(_is_me(h) for _, h in _mx(d)), d))
+    doms = sorted((d for d in s["domains"] if not is_local(d)), key=lambda d: (not any(_is_me(h) for _, h in _mx(d)), d))
     if ptr and here(ptr) and any(ptr == d or ptr.endswith("." + d) for d in doms):
         return {"hostname": ptr, "reason": "It's the reverse DNS name of this server's IP and points back here — ideal.", "ptr": ptr, "ip": ip, "ptr_ok": True}
     for d in doms:
@@ -1719,7 +1798,7 @@ def _dkim_key(d: str) -> Path:
 
 def ensure_dkim(d: str) -> str | None:
     """Create the domain's DKIM key once; return the DNS TXT value."""
-    if not IS_LINUX or not shutil.which("openssl", path=PATH):
+    if not IS_LINUX or not shutil.which("openssl", path=PATH) or is_local(d):
         return None
     key = _dkim_key(d)
     if not key.exists():
@@ -1890,6 +1969,9 @@ def _suggest_spf(d: str, current: str, ip: str) -> str:
 def deliverability(d: str) -> dict:
     d = _domain(d)
     s = load()
+    if is_local(d):
+        return {"domain": d, "local": True, "checks": {}, "nameservers": [], "zone_here": False, "authoritative": False,
+                "score": 0, "total": 0, "hostname": hostname(s), "ip": _public_ip()}
     ip = _public_ip()
     host = hostname(s)
     mx = _mx(d)
@@ -1947,7 +2029,7 @@ def deliverability_all() -> dict:
     for d in sorted(s["domains"]):
         try:
             r = deliverability(d)
-            out.append({"domain": d, "score": r["score"], "total": r["total"],
+            out.append({"domain": d, "score": r["score"], "total": r["total"], "local": r.get("local", False),
                         "problems": [k.upper() for k, v in r["checks"].items() if not v["ok"]]})
         except Exception as e:
             out.append({"domain": d, "error": str(e)})
@@ -2020,9 +2102,28 @@ def queue_action(action: str, ids: list[str] | None = None) -> dict:
 _LOG_RX = re.compile(r"^(\S+)\s+\S+\s+(postfix/[\w-]+)\[\d+\]:\s+(.*)$")
 
 
+def track_settings() -> dict:
+    t = load().get("track") or {}
+    return {"days": int(t.get("days", 30)), "cleared": int(t.get("cleared", 0))}
+
+
+def set_track_settings(days: int | None = None, clear: bool = False) -> dict:
+    s = load()
+    t = s.setdefault("track", {"days": 30, "cleared": 0})
+    if days is not None:
+        t["days"] = max(1, min(365, int(days)))
+    if clear:
+        t["cleared"] = int(time.time())
+    save(s)
+    return track_settings()
+
+
 def track(recipient: str = "", status: str = "", hours: int = 168, limit: int = 500) -> dict:
-    """Delivery events from the mail log: one row per recipient per message (or SMTP rejection)."""
-    since = f"-{max(1, min(24 * 90, int(hours)))}h"
+    """Delivery events from the mail log: one row per recipient per message (or SMTP rejection).
+    Only the last `days` (30 by default) are shown, and nothing from before “Clear history”."""
+    ts = track_settings()
+    hours = min(int(hours), ts["days"] * 24)
+    since = f"-{max(1, min(24 * 365, hours))}h"
     r = _run(["journalctl", "SYSLOG_FACILITY=2", "--since", since, "-o", "short-iso", "--no-pager", "-q"], 60)
     text = r.stdout
     if not text.strip() and Path("/var/log/mail.log").exists():
@@ -2068,6 +2169,13 @@ def track(recipient: str = "", status: str = "", hours: int = 168, limit: int = 
             rows.append({"time": ts, "id": qid, "status": "rejected", "to": (re.search(r"to=<([^>]*)>", info) or [None, ""])[1],
                          "from": (re.search(r"from=<([^>]*)>", info) or [None, ""])[1], "result": info.split(":", 1)[-1][:200],
                          "client": mg.get("client", "")})
+    if ts["cleared"]:
+        def after(r_):
+            try:
+                return datetime.fromisoformat(r_["time"]).timestamp() > ts["cleared"]
+            except (ValueError, TypeError):
+                return True
+        rows = [r_ for r_ in rows if after(r_)]
     scores = _spam_scores()
     for r_ in rows:
         if r_.get("id") in scores:
@@ -2082,7 +2190,7 @@ def track(recipient: str = "", status: str = "", hours: int = 168, limit: int = 
     counts: dict[str, int] = {}
     for x in rows:
         counts[x["status"]] = counts.get(x["status"], 0) + 1
-    return {"events": rows[:limit], "total": len(rows), "counts": counts}
+    return {"events": rows[:limit], "total": len(rows), "counts": counts, "settings": ts}
 
 
 def _spam_scores() -> dict[str, float]:

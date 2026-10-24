@@ -166,7 +166,8 @@ window.AuroraMail = (ui) => {
       const score = el("span", { class: "em-score" }, el("span", { class: "muted", text: "checking…" }));
       return el("div", { class: "em-dom" }, [avatar(d.domain), el("div", { class: "em-dom-t" }, [el("b", { text: d.domain }),
         el("span", { class: "muted", text: `${d.accounts} account${d.accounts === 1 ? "" : "s"} · routing ${d.routing}` })]), score,
-        btn("DNS health", () => { state.mailDomain = d.domain; navigate("deliverability"); }, "btn-ghost")]);
+        btn("DNS health", () => { state.mailDomain = d.domain; navigate("deliverability"); }, "btn-ghost"),
+        d.accounts ? null : armed("Remove", "Click again to remove", () => call(() => API.mailDomainRemove(d.domain), `${d.domain} removed`, () => navigate("email", { history: "none" })), "btn-ghost")].filter(Boolean));
     }) : [empty("globe", "No mail domains yet", "Creating an email account adds its domain automatically.", btn("Create an email account", () => navigate("mailaccounts"), "btn-primary"))]);
     body.append(el("div", { class: "card" }, [el("div", { class: "em-card-h" }, [el("h3", { text: "Domains" }), btn("Add a domain", () => addDomainModal(() => navigate("email", { history: "none" })), "btn-ghost")]), dl]));
     if (doms.domains.length) API.mailDeliverability("").then((r) => {
@@ -174,7 +175,7 @@ window.AuroraMail = (ui) => {
         const node = dl.children[i] && dl.children[i].querySelector(".em-score");
         if (!node) return;
         node.innerHTML = "";
-        node.append(x.error ? pill("check failed", "warn") : pill(`${x.score}/${x.total} DNS checks`, x.score === x.total ? "good" : x.score >= 3 ? "warn" : "bad"));
+        node.append(x.local ? pill("local network", "good") : x.error ? pill("check failed", "warn") : pill(`${x.score}/${x.total} DNS checks`, x.score === x.total ? "good" : x.score >= 3 ? "warn" : "bad"));
       });
     }).catch(() => {});
     // all tools
@@ -185,6 +186,19 @@ window.AuroraMail = (ui) => {
       ["mailtls", "Encryption", "lock"], ["calendars", "Calendars & Contacts", "calendar"], ["maildisk", "Email Disk Usage", "disk"], ["mailqueue", "Mail Queue", "queue"]];
     body.append(el("div", { class: "card" }, [el("h3", { text: "Email tools" }), el("div", { class: "em-tools" },
       tools.map(([v, l, ic]) => el("button", { type: "button", class: "em-tool", onclick: () => navigate(v) }, [el("span", { class: "em-tool-ico" }, icon(ic, 20)), el("span", { text: l })])))]));
+    // local network mail
+    const lc = st.local || {};
+    body.append(el("div", { class: "card em-local" }, [el("div", { class: "em-card-h" }, [el("h3", { text: "Local mail (no internet needed)" }),
+      lc.enabled ? pill(`on · @${lc.domain}`, "good") : pill("off")]),
+      el("p", { class: "muted", text: `Gives this ${lc.mdns ? "device" : "server"} its own mail domain, ${lc.domain}. Apps here (WordPress, cron, scripts) can use addresses like admin@${lc.domain}, and other AuroraPanel servers on the same network can send to it — they find each other by their .local name, no DNS or internet required.` }),
+      lc.enabled ? el("div", { class: "em-local-tips" }, [
+        el("div", {}, [el("b", { text: "Here" }), el("span", { class: "muted", text: lc.accounts.length ? lc.accounts.join(", ") : `No accounts yet — create e.g. admin@${lc.domain} in Email Accounts.` })]),
+        el("div", {}, [el("b", { text: "Other devices" }), el("span", { class: "muted", text: `Send to name@<their-hostname>.local (e.g. you@ns2.local). ${lc.mdns ? "This device answers its .local name (avahi is running)." : "This machine doesn't run avahi, so other devices can't find it by name — fine for mail on this server itself."}` })]),
+      ]) : null,
+      el("div", { class: "toolbar" }, lc.enabled ? [btn("Create an account here", () => { state.mailDomain = lc.domain; navigate("mailaccounts"); }, "btn-primary"),
+        btn("Turn off", () => call(() => API.mailLocal(false), "Local mail turned off", () => navigate("email", { history: "none" })), "btn-ghost")]
+        : [btn(`Turn on local mail as @${lc.domain || "this-device.local"}`, () => call(() => API.mailLocal(true), "Local mail is on", () => navigate("email", { history: "none" })), "btn-primary")]),
+    ].filter(Boolean)));
     // server name: detected automatically unless set by hand
     const det = st.detected || {};
     const auto = st.hostname_mode !== "manual";
@@ -245,7 +259,7 @@ window.AuroraMail = (ui) => {
       const accs = data.accounts;
       chips.innerHTML = "";
       if (data.domains.length > 1) chips.append(...["", ...data.domains].map((d) => el("button", { type: "button", class: `em-chip ${view.domain === d ? "on" : ""}`,
-        text: d || `All domains (${accs.length})`, onclick: () => { view.domain = d; state.mailDomain = d; draw(); } })));
+        text: d ? `${d} (${accs.filter((a) => a.domain === d).length})` : `All domains (${accs.length})`, onclick: () => { view.domain = d; state.mailDomain = d; draw(); } })));
       const restricted = accs.filter((a) => Object.values(a.suspend || {}).some(Boolean)).length;
       const full = accs.filter((a) => a.percent != null && a.percent >= 80).length;
       filt.innerHTML = "";
@@ -258,7 +272,18 @@ window.AuroraMail = (ui) => {
       summary.textContent = `${accs.length} account${accs.length === 1 ? "" : "s"} · ${fmtBytes(total)} stored`;
       list.innerHTML = "";
       if (!accs.length) { list.append(empty("users", "No email accounts yet", "Create one — its domain is set up for mail automatically.", btn("Create an email account", () => createAccount(), "btn-primary"))); return; }
-      if (!rows.length) { list.append(el("p", { class: "empty", text: "Nothing matches." })); return; }
+      if (!rows.length) {
+        if (view.domain && !accs.some((a) => a.domain === view.domain)) {
+          const d = view.domain;
+          list.append(empty("globe", `No accounts on ${d}`, "Create one, or stop handling mail for this domain (its lists, forwarders and settings are removed too).", el("div", { class: "toolbar" }, [
+            btn(`Create an account on ${d}`, () => createAccount(), "btn-primary"),
+            armed(`Remove ${d}`, "Click again to remove the domain", async () => {
+              const r = await call(() => API.mailDomainRemove(d), `${d} removed`);
+              if (r) { view.domain = ""; state.mailDomain = ""; load(); }
+            }, "btn-ghost")])));
+        } else list.append(el("p", { class: "empty", text: "Nothing matches." }));
+        return;
+      }
       rows.forEach((a) => {
         const cb = el("input", { type: "checkbox" }); cb.checked = view.sel.has(a.address);
         cb.onchange = () => { cb.checked ? view.sel.add(a.address) : view.sel.delete(a.address); drawBulk(); };
@@ -637,13 +662,18 @@ window.AuroraMail = (ui) => {
     [[1, "1 hour"], [24, "24 hours"], [168, "7 days"], [720, "30 days"]].forEach(([h, l]) => range.append(el("button", { type: "button", class: v.hours === h ? "active" : "", text: l, onclick: (e) => { v.hours = h; range.querySelectorAll("button").forEach((b) => b.classList.toggle("active", b === e.target)); load(); } })));
     const chips = el("div", { class: "em-chips" });
     const table = el("div", {}, el("div", { class: "loading", text: "Reading the mail log…" }));
-    root.append(pageHead("Track Delivery", "Every message this server accepted, sent, deferred or refused — and why.", [btn("Send a test email", () => testMail(), "btn-ghost")]),
+    const keep = el("select", { class: "em-age", title: "How long Track Delivery shows history" },
+      [[7, "Keep 7 days"], [30, "Keep 30 days"], [90, "Keep 90 days"], [365, "Keep a year"]].map(([d, l]) => el("option", { value: d, text: l })));
+    keep.onchange = () => call(() => API.mailTrackSettings({ days: +keep.value }), "History setting saved", load);
+    const clearBtn = armed("Clear history", "Click again to clear", () => call(() => API.mailTrackSettings({ clear: true }), "History cleared", load), "btn-ghost");
+    root.append(pageHead("Track Delivery", "Every message this server accepted, sent, deferred or refused — and why.", [keep, clearBtn, btn("Send a test email", () => testMail(), "btn-ghost")]),
       el("div", { class: "card em-pad0" }, [el("div", { class: "em-tools-bar" }, [q, btn("Run report", () => load(), "btn-primary"), range]), chips, table]));
     const ST = { sent: ["Delivered", "good", "✓"], deferred: ["Deferred", "warn", "⏳"], bounced: ["Bounced", "bad", "!"], rejected: ["Rejected", "bad", "⛔"], expired: ["Expired", "bad", "!"] };
     let data;
     async function load() {
       table.innerHTML = ""; table.append(el("div", { class: "loading", text: "Reading the mail log…" }));
       try { data = await API.mailTrack(q.value.trim(), "", v.hours); } catch (e) { table.innerHTML = ""; table.append(el("p", { class: "empty", text: e.message })); return; }
+      if (data.settings) keep.value = String(data.settings.days);
       draw();
     }
     function draw() {
@@ -772,9 +802,9 @@ window.AuroraMail = (ui) => {
     body.innerHTML = "";
     if (!all.domains.length) { body.append(el("div", { class: "card" }, empty("send", "No mail domains yet", "Create an email account first.", btn("Email Accounts", () => navigate("mailaccounts"), "btn-primary")))); return; }
     const listBox = el("div", { class: "card em-pad0" }, el("div", { class: "em-list" }, all.domains.map((d) => el("div", { class: "em-row" }, [avatar(d.domain),
-      el("div", { class: "em-row-main", onclick: () => detail(d.domain) }, [el("b", { text: d.domain }), el("span", { class: "muted", text: d.error ? d.error : d.problems.length ? `Problems: ${d.problems.join(", ")}` : "All checks pass" })]),
-      d.error ? pill("error", "bad") : el("span", { class: `em-ring ${d.score === d.total ? "good" : d.score >= 3 ? "warn" : "bad"}`, text: `${d.score}/${d.total}` }),
-      el("div", { class: "em-row-act" }, [btn("Manage", () => detail(d.domain), "btn-ghost")])]))));
+      el("div", { class: "em-row-main", onclick: () => (d.local ? null : detail(d.domain)) }, [el("b", { text: d.domain }), el("span", { class: "muted", text: d.error ? d.error : d.local ? "Local network domain — no DNS records needed" : d.problems.length ? `Problems: ${d.problems.join(", ")}` : "All checks pass" })]),
+      d.local ? pill("local", "good") : d.error ? pill("error", "bad") : el("span", { class: `em-ring ${d.score === d.total ? "good" : d.score >= 3 ? "warn" : "bad"}`, text: `${d.score}/${d.total}` }),
+      el("div", { class: "em-row-act" }, d.local ? [] : [btn("Manage", () => detail(d.domain), "btn-ghost")])]))));
     const detBox = el("div");
     body.append(listBox, detBox);
     async function detail(domain) {
@@ -894,16 +924,17 @@ window.AuroraMail = (ui) => {
     const c = d.cert || {};
     const days = c.expires ? Math.round((new Date(c.expires) - Date.now()) / 864e5) : null;
     body.append(el("div", { class: "card" }, [el("div", { class: "em-card-h" }, [el("h3", { text: "Certificate" }), pill(d.source === "self" ? "Self-signed" : "Let's Encrypt", d.source === "self" ? "warn" : "good")]),
-      kv([["Mail server name", d.hostname], ["Issued to", (c.names || []).join(", ") || c.subject], ["Issuer", c.issuer], ["Expires", c.expires ? `${new Date(c.expires).toLocaleDateString()}${days != null ? ` (${days} days)` : ""}` : "—"],
+      kv([["Mail server name", d.hostname], ["Issued to", (c.names || []).join(", ") || c.subject], ["Issuer", c.issuer],
+        ["Expires", c.expires ? `${new Date(c.expires).toLocaleDateString()}${days != null ? ` (${days} days${d.source !== "self" ? ", renews automatically" : ""})` : ""}` : "—"],
         ["Covers the server name", d.covers_host ? pill("yes", "good") : pill("no", "bad")]]),
       d.source === "self" ? el("div", { class: "dm-note" }, [icon("info", 15), el("span", { text: "Mail apps show a warning with a self-signed certificate. A free Let's Encrypt certificate fixes that — the server name must point to this server and port 80 must be reachable." })]) : null,
       el("div", { class: "toolbar" }, [
-        d.certbot ? btn(`Get a Let's Encrypt certificate for ${d.hostname}`, async () => {
+        d.certbot ? btn(d.source === d.hostname ? "Renew now" : `Get a Let's Encrypt certificate for ${d.hostname}`, async () => {
           const r = await call(() => API.mailTLSIssue()); if (!r) return;
           const jp = ui.jobPanel(body); jp.run(r.job, "Let's Encrypt");
           const t = setInterval(async () => { const j = await API.job(r.job).catch(() => null); if (j && j.status !== "running") { clearInterval(t); if (j.status === "done") { toast("Certificate installed", "good"); navigate("mailtls", { history: "none" }); } } }, 2000);
           state.cleanups.push(() => clearInterval(t));
-        }, "btn-primary") : btn("Install Certbot", () => installComponent("certbot"), "btn-primary"),
+        }, d.source === d.hostname ? "btn-ghost" : "btn-primary") : btn("Install Certbot", () => installComponent("certbot"), "btn-primary"),
         ...d.letsencrypt.filter((n) => n !== d.source).map((n) => btn(`Use ${n}`, () => call(() => API.mailTLSSet(n), "Certificate switched", () => navigate("mailtls", { history: "none" })), "btn-ghost")),
         d.source !== "self" ? btn("Back to self-signed", () => call(() => API.mailTLSSet("self"), "Switched to self-signed", () => navigate("mailtls", { history: "none" })), "btn-ghost") : null].filter(Boolean))].filter(Boolean)));
     body.append(el("div", { class: "card" }, [el("h3", { text: "Encrypted connections" }),
