@@ -24,6 +24,7 @@ or the [Raspberry Pi Forums thread](https://forums.raspberrypi.com/viewtopic.php
 | **Network** | VPN servers — **WireGuard** (QR codes), **OpenVPN** (per-user logins: certificate + password, password only or certificate only) and **IPsec/IKEv2** (native on iPhone/Mac/Windows) — each with an end-to-end self-test. Dynamic DNS (DuckDNS, No-IP, Dynu, deSEC, Cloudflare, FreeDNS, custom). Port Checker (outside probe, double-NAT/CGNAT detection, router instructions, UPnP). Network Monitor (who tried to connect). IP Blocker & Trust (ban IPs/ranges with expiry, trusted list). Fail2ban. Interfaces & Wi-Fi with confirm-or-revert. |
 | **Databases** | MariaDB and PostgreSQL databases and users, wizards, phpMyAdmin link. |
 | **Domains** | Apache virtual hosts (Force HTTPS, Let's Encrypt), folder sites at `http://<pi-ip>/<name>` (no domain needed), redirects, BIND zone editor. |
+| **Email** | A full mail server in one click (Postfix, Dovecot 2.4, Rspamd, Redis): email accounts with quotas and sign-in / receive / send restrictions, forwarders and domain forwarders (with a “where does this go?” trace), default address (catch-all), email routing (local / backup / remote MX), autoresponders (schedule, HTML, %subject%/%from% tags), mailing lists (members-only, announcements, DMARC-safe), per-account and global filters (Sieve), spam filters (thresholds, Junk folder, auto-delete, allow/block lists, greylisting), track delivery (every message, spam score, reason), deliverability checks with one-click DNS records (MX, SPF, DKIM, DMARC, PTR), DKIM signing, address importer (CSV), TLS (Let's Encrypt), mail queue, disk usage, webmail (Roundcube), calendars & contacts with sharing (CalDAV/CardDAV), and one-tap iPhone/Mac setup profiles. |
 | **Security** | fail2ban jails (SSH, panel, OpenVPN, FTP, Apache, Nginx, MariaDB, port scans, repeat offenders), SSH keys, SSL/TLS, ModSecurity, hotlink protection, API tokens, TOTP two-factor login, panel HTTPS. |
 | **Files** | File manager (upload, edit, zip, recycle bin), Images (thumbnails, resize, WebP), Directory Privacy (password-protected folders), Disk & Inodes usage, Web Disk (WebDAV), FTP accounts (locked to a folder; full / read-only / upload-only), Backups (folders, single databases, upload & import `.sql` dumps, categories, live progress bars, several restores at once) + Backup Wizard (files and databases, selective restore), Git Version Control (clone, pull, deploy, deploy keys). |
 | **Advanced** | Browser terminal, cron wizard, `.htaccess` tools, ClamAV virus scanner, DNS tracing. |
@@ -51,10 +52,13 @@ admin username + password.
 
 The scripts create a `.venv`, install `requirements.txt`, and start Uvicorn.
 
-## Installing on a Raspberry Pi
+## Installing on a Raspberry Pi or an Ubuntu/Debian server
 
-Works on any Raspberry Pi running Raspberry Pi OS Bookworm or newer (or any
-Debian/Ubuntu with systemd and Python 3.10+), under any user name.
+Works on any Raspberry Pi running Raspberry Pi OS Bookworm or newer, and on any
+Ubuntu or Debian server or VPS with systemd and Python 3.10+, under any user name.
+A fresh server doesn't need anything else first: pages that need Apache, PHP,
+MariaDB, an FTP server and so on offer to install them in one click, with a
+progress bar.
 
 ```bash
 git clone <your-repo> ~/AuroraPanel   # or copy the folder over
@@ -64,12 +68,18 @@ sudo bash install.sh
 
 The installer asks which port to use (default `8088`), installs the needed
 packages, creates `.venv`, and sets up a `aurorapanel` systemd service that
-starts on boot. It then prints the URLs to open, e.g. `http://<pi-ip>:8088`.
+starts on boot. It then prints the URLs to open, e.g. `https://<pi-ip>:8088`.
+
+New installs use HTTPS with a self-signed certificate, so your login is never
+sent in the clear. Your browser warns once ("Not private"): choose Advanced →
+Proceed. Switch to a Let's Encrypt certificate or back to plain HTTP under
+Security → Panel HTTPS, or install with `--no-https`.
 
 | Command | What it does |
 | ------- | ------------ |
 | `sudo bash install.sh` | Interactive install (prompts for port) |
 | `sudo bash install.sh --port 9000` | Non-interactive install on port 9000 |
+| `sudo bash install.sh --no-https` | New install on plain HTTP instead of HTTPS |
 | `sudo bash install.sh` (again) | Change the port / repair; keeps your admin account |
 | `sudo bash install.sh --uninstall` | Remove AuroraPanel completely (asks first; add `--yes` to skip the question) |
 

@@ -3,3 +3,4 @@ uvicorn[standard]==0.34.0
 psutil==6.1.1
 python-multipart==0.0.20
 Pillow>=10.0
+dnspython>=2.6

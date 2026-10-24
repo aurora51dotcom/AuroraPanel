@@ -53,8 +53,9 @@ class Job:
 
     def _run(self, env: dict | None):
         try:
+            argv = _with_apt_progress(self.argv)
             proc = subprocess.Popen(
-                self.argv,
+                argv,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -63,11 +64,15 @@ class Job:
             )
             assert proc.stdout is not None
             for line in proc.stdout:
-                self.lines.append(line.rstrip("\n"))
+                line = line.rstrip("\n")
+                if not apt_status(self, line):
+                    self.lines.append(line)
             proc.wait()
             self.returncode = proc.returncode
             ok_codes = self.meta.get("ok_returncodes", [0])
             self.status = "done" if proc.returncode in ok_codes else "failed"
+            if self.status == "done" and self.progress is not None:
+                self.progress = 100.0
         except (OSError, subprocess.SubprocessError) as exc:
             self.lines.append(f"[runner error] {exc}")
             self.status = "failed"
@@ -78,6 +83,43 @@ class Job:
     def start(self, env: dict | None = None):
         self._thread = threading.Thread(target=self._run, args=(env,), daemon=True)
         self._thread.start()
+
+
+# apt-get reports machine-readable progress on a file descriptor of our choice
+# ("dlstatus:pkg:pct:text" while downloading, "pmstatus:pkg:pct:text" while installing),
+# which drives the job's progress bar. Downloads fill the first DL_SHARE percent.
+DL_SHARE = 40
+_APT_OPTS = ["-o", "APT::Status-Fd=1", "-o", "Dpkg::Use-Pty=0"]
+_LOCK_OPT = ["-o", "DPkg::Lock::Timeout=600"]
+
+
+def _with_apt_progress(argv: Sequence[str]) -> list[str]:
+    """apt-get commands get progress reporting, and wait for a running apt (a fresh
+    Ubuntu server runs unattended-upgrades right after boot) instead of failing on its lock."""
+    argv = list(argv)
+    if argv and argv[0].rsplit("/", 1)[-1] == "apt-get":
+        extra = list(_APT_OPTS)
+        if not any("Lock::Timeout" in a for a in argv):
+            extra += _LOCK_OPT
+        argv[1:1] = extra
+    return argv
+
+
+def apt_status(job: "Job", line: str, span: tuple[float, float] = (0.0, 100.0)) -> bool:
+    """Turn an apt status line into job progress/stage; True when the line was one."""
+    kind, _, rest = line.partition(":")
+    if kind not in ("dlstatus", "pmstatus") or rest.count(":") < 2:
+        return False
+    pkg, pct, text = rest.split(":", 2)
+    try:
+        p = float(pct)
+    except ValueError:
+        return True
+    p = p * DL_SHARE / 100 if kind == "dlstatus" else DL_SHARE + p * (100 - DL_SHARE) / 100
+    lo, hi = span
+    job.progress = round(max(job.progress or 0.0, lo + (hi - lo) * p / 100), 1)
+    job.stage = text.strip() or pkg
+    return True
 
 
 def launch(title: str, argv: Sequence[str], env: dict | None = None, meta: dict | None = None) -> Job:
@@ -107,6 +149,25 @@ class _Log:
         self.job.progress = None if pct is None else round(max(0.0, min(100.0, pct)), 1)
         if stage is not None:
             self.job.stage = stage
+
+    def apt(self, args: Sequence[str], span: tuple[float, float] = (0.0, 100.0), timeout: int = 1800) -> int:
+        """Run apt-get (args after "apt-get"), streaming its output into the log and its
+        progress into the span [lo, hi] of this job's bar. Returns the exit code."""
+        argv = _with_apt_progress(["apt-get", "-y", *args])
+        env = {"DEBIAN_FRONTEND": "noninteractive", "PATH": "/usr/sbin:/usr/bin:/sbin:/bin",
+               "LANG": "C.UTF-8"}
+        proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, env=env)
+        assert proc.stdout is not None
+        t0 = time.time()
+        for line in proc.stdout:
+            line = line.rstrip("\n")
+            if not apt_status(self.job, line, span):
+                self.job.lines.append(line)
+            if time.time() - t0 > timeout:
+                proc.kill()
+                self.job.lines.append("✖ apt-get took too long and was stopped")
+                break
+        return proc.wait()
 
 
 class FnJob(Job):

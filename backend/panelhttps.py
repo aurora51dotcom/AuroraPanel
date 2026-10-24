@@ -181,6 +181,25 @@ def _restart_soon():
         raise PanelHttpsError(r.stderr.strip() or "Couldn't schedule the panel restart")
 
 
+def _write_dropin(crt: str, key: str):
+    DROPIN.parent.mkdir(parents=True, exist_ok=True)
+    DROPIN.write_text(
+        "# Written by AuroraPanel (Security → Panel HTTPS). Delete this file and run\n"
+        f"# 'systemctl daemon-reload && systemctl restart {SERVICE}' to go back to HTTP.\n"
+        "[Service]\n"
+        f"Environment=UVICORN_SSL_CERTFILE={crt}\n"
+        f"Environment=UVICORN_SSL_KEYFILE={key}\n", encoding="utf-8")
+
+
+def install_default():
+    """New installs start on HTTPS with a self-signed certificate (install.sh calls this
+    before it starts the service, so there's no browser to confirm and no revert timer)."""
+    if not (SELF_CRT.is_file() and SELF_KEY.is_file()):
+        _make_self_signed()
+    _check_pair(str(SELF_CRT), str(SELF_KEY))
+    _write_dropin(str(SELF_CRT), str(SELF_KEY))
+
+
 def enable(source: str, regenerate: bool = False) -> dict:
     if not shutil.which("systemd-run"):
         raise PanelHttpsError("systemd is required")
@@ -207,13 +226,7 @@ def enable(source: str, regenerate: bool = False) -> dict:
         PENDING.unlink(missing_ok=True)
         raise PanelHttpsError(r.stderr.strip() or "Couldn't arm the automatic revert")
 
-    DROPIN.parent.mkdir(parents=True, exist_ok=True)
-    DROPIN.write_text(
-        "# Written by AuroraPanel (Security → Panel HTTPS). Delete this file and run\n"
-        f"# 'systemctl daemon-reload && systemctl restart {SERVICE}' to go back to HTTP.\n"
-        "[Service]\n"
-        f"Environment=UVICORN_SSL_CERTFILE={crt}\n"
-        f"Environment=UVICORN_SSL_KEYFILE={key}\n", encoding="utf-8")
+    _write_dropin(crt, key)
     _set_le_hook(source != "self")
     _run(["systemctl", "daemon-reload"])
     _restart_soon()

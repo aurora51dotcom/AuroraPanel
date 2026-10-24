@@ -3,18 +3,23 @@
   "use strict";
 
   const $ = (sel, root = document) => root.querySelector(sel);
+  // The interface was written for a Raspberry Pi; on any other machine "Pi" reads "server".
+  let IS_PI = true;
+  const host = (s) => (IS_PI || typeof s !== "string" ? s
+    : s.replace(/(?<!Raspberry )\bPi's\b/g, "server's").replace(/(?<!Raspberry |\w\.)\bPi\b(?![-.]\w)/g, "server"));
   const el = (tag, attrs = {}, children = []) => {
     const node = document.createElement(tag);
     for (const [k, v] of Object.entries(attrs)) {
       if (k === "class") node.className = v;
-      else if (k === "html") node.innerHTML = v;
-      else if (k === "text") node.textContent = v;
+      else if (k === "html") node.innerHTML = host(v);
+      else if (k === "text") node.textContent = host(v);
+      else if ((k === "placeholder" || k === "title") && typeof v === "string") node.setAttribute(k, host(v));
       else if (k.startsWith("on") && typeof v === "function") node.addEventListener(k.slice(2), v);
       else if (v !== null && v !== undefined) node.setAttribute(k, v);
     }
     for (const c of [].concat(children)) {
       if (c == null) continue;
-      node.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+      node.appendChild(typeof c === "string" ? document.createTextNode(host(c)) : c);
     }
     return node;
   };
@@ -37,7 +42,7 @@
   let toastTimer = null;
   function toast(msg, kind = "good") {
     const t = $("#toast");
-    t.textContent = msg;
+    t.textContent = host(msg);
     t.className = `toast ${kind}`;
     t.hidden = false;
     clearTimeout(toastTimer);
@@ -114,6 +119,20 @@
     eye: '<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
     eyeOff: '<path d="M10.6 5.1A9.8 9.8 0 0 1 12 5c6.4 0 10 7 10 7a17 17 0 0 1-2.6 3.5M6.6 6.6A17 17 0 0 0 2 12s3.6 7 10 7a9.7 9.7 0 0 0 5.4-1.6"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/><line x1="3" y1="3" x2="21" y2="21"/>',
     wand: '<path d="m15 4 1-2 1 2 2 1-2 1-1 2-1-2-2-1z"/><path d="m18 12 .7-1.3L20 10l-1.3-.7L18 8l-.7 1.3L16 10l1.3.7z"/><line x1="3" y1="21" x2="14" y2="10"/>',
+    mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
+    forward: '<polyline points="15 17 20 12 15 7"/><path d="M4 18v-2a4 4 0 0 1 4-4h12"/>',
+    route: '<circle cx="6" cy="19" r="2"/><circle cx="18" cy="5" r="2"/><path d="M8 19h7a3.5 3.5 0 0 0 0-7H9a3.5 3.5 0 0 1 0-7h7"/>',
+    reply: '<polyline points="9 17 4 12 9 7"/><path d="M20 18v-2a4 4 0 0 0-4-4H4"/>',
+    at: '<circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8"/>',
+    listing: '<line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><circle cx="3.5" cy="6" r="1"/><circle cx="3.5" cy="12" r="1"/><circle cx="3.5" cy="18" r="1"/>',
+    pin: '<path d="M12 21s-7-6.1-7-11.5A7 7 0 0 1 19 9.5C19 14.9 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/>',
+    filter: '<polygon points="22 3 2 3 10 12.5 10 19 14 21 14 12.5 22 3"/>',
+    inbox: '<polyline points="22 12 16 12 14 15 10 15 8 12 2 12"/><path d="M5.5 5h13l3.5 7v6a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-6z"/>',
+    upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>',
+    send: '<line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/>',
+    spam: '<path d="M12 2 4 5v6c0 5 3.4 9.4 8 11 4.6-1.6 8-6 8-11V5z"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>',
+    queue: '<rect x="3" y="4" width="18" height="4" rx="1"/><rect x="3" y="10" width="18" height="4" rx="1"/><rect x="3" y="16" width="18" height="4" rx="1"/>',
+    contacts: '<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="12" cy="10" r="3"/><path d="M6.5 19a5.5 5.5 0 0 1 11 0"/>',
     git: '<circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="8" r="2.5"/><line x1="6" y1="8.5" x2="6" y2="15.5"/><path d="M18 10.5c0 4-6 3-11 6"/>',
   };
   // Polar-bear brand logo (filled, drawn on the aurora chip).
@@ -195,7 +214,7 @@
   //  Shell chrome: icon rail (sections) + pill tabs (tools in a section)
   // ======================================================================
   const GROUP_ICONS = {
-    System: "processes", Network: "network", Applications: "apps", Databases: "database", Domains: "globe", Security: "shield",
+    System: "processes", Network: "network", Applications: "apps", Databases: "database", Domains: "globe", Email: "mail", Security: "shield",
     Files: "folder", Advanced: "terminal", Software: "packages", Preferences: "gear",
   };
   let NAV_GROUPS = [];
@@ -205,7 +224,8 @@
     document.querySelectorAll("#nav > *").forEach((n) => {
       if (n.classList.contains("nav-group")) { cur = { name: n.dataset.group || n.textContent.trim(), items: [] }; NAV_GROUPS.push(cur); }
       else if (cur && n.dataset.view && n.dataset.view !== "dashboard") {
-        cur.items.push({ view: n.dataset.view, label: n.textContent.trim() });
+        const label = [...n.childNodes].filter((x) => !(x.classList && x.classList.contains("nav-ico"))).map((x) => x.textContent).join("").trim();
+        cur.items.push({ view: n.dataset.view, label });
       }
     });
   }
@@ -372,6 +392,8 @@
     brandLogo();
     try {
       const s = await API.status();
+      IS_PI = s.pi !== false;
+      if (!IS_PI) document.querySelectorAll("[data-pi]").forEach((n) => { n.textContent = host(n.textContent); });
       state.needsSetup = !s.initialized;
       if (!s.initialized) return showAuth(true);
       // Already have creds — check for a live session.
@@ -392,7 +414,7 @@
     $("#auth-screen").hidden = false;
     $("#auth-subtitle").textContent = setupMode
       ? "First run — create your admin account"
-      : "Sign in to your Raspberry Pi";
+      : IS_PI ? "Sign in to your Raspberry Pi" : "Sign in to your server";
     $("#auth-submit").textContent = setupMode ? "Create account" : "Sign in";
     $("#auth-password").setAttribute("autocomplete", setupMode ? "new-password" : "current-password");
     $("#auth-error").hidden = true;
@@ -509,6 +531,10 @@
     images: "Images", dirprivacy: "Directory Privacy", webdisk: "Web Disk", ftpaccounts: "FTP Accounts",
     backupwiz: "Backup Wizard", git: "Git Version Control", inodes: "Inodes Usage",
     about: "About & Updates",
+    email: "Email", mailaccounts: "Email Accounts", forwarders: "Forwarders", mailrouting: "Email Routing", autoresponders: "Autoresponders",
+    defaultaddress: "Default Address", mailinglists: "Mailing Lists", trackdelivery: "Track Delivery", globalfilters: "Global Email Filters",
+    emailfilters: "Email Filters", deliverability: "Email Deliverability", addressimporter: "Address Importer", spamfilters: "Spam Filters",
+    mailtls: "Encryption", calendars: "Calendars & Contacts", maildisk: "Email Disk Usage", mailqueue: "Mail Queue",
   };
 
   $("#nav").addEventListener("click", (e) => {
@@ -554,11 +580,12 @@
     renderChrome(view);
     const root = $("#view-root");
     root.innerHTML = "";
+    state.navId = (state.navId || 0) + 1;
     // Scroll back to the top so a short view never looks blank.
     try { window.scrollTo(0, 0); const c = document.querySelector(".content"); if (c) c.scrollTop = 0; } catch (e) {}
     // Tear down any active terminal when leaving its view.
     if (view !== "terminal" && termCtx.dispose) { termCtx.dispose(); }
-    ({
+    const render = ({
       dashboard: viewDashboard,
       terminal: viewTerminal,
       services: viewServices,
@@ -619,7 +646,141 @@
       git: viewGit,
       inodes: viewInodes,
       about: viewAbout,
-    }[view] || viewDashboard)(root);
+    }[view] || mailViews()[view] || viewDashboard);
+    if (VIEW_NEEDS[view]) requireGate(root, view, VIEW_NEEDS[view], render);
+    else render(root);
+  }
+
+  // ======================================================================
+  //  Requirements — a fresh Ubuntu/Debian server has no Apache, PHP, MariaDB…
+  //  Pages that need them offer a one-click install (with an orange progress
+  //  bar) instead of failing. "soft" ones only show a banner above the page.
+  // ======================================================================
+  const VIEW_NEEDS = {
+    vhosts: ["web"], redirects: ["web"], hotlink: ["web"], indexes: ["web"], mime: ["web"], errorpages: ["web"],
+    handlers: ["web"], dirprivacy: ["web"], webdisk: ["web"], phpver: ["web"],
+    appstore: ["web", "mariadb"], app: ["web", "mariadb"], wordpress: ["web", "mariadb"],
+    modsec: ["web", "modsecurity"], ssl: { need: ["web"], soft: ["certbot"] },
+    mysql: ["mariadb"], mysqlwiz: ["mariadb"], pgsql: ["postgresql"], pgwiz: ["postgresql"],
+    ftpaccounts: ["ftp"], git: ["git"], cron: ["cron"], virus: ["clamav"], firewall: ["ufw"], leech: ["fail2ban"],
+    zones: { soft: ["bind9"] },
+    email: ["mail"], mailaccounts: { need: ["mail"], soft: ["webmail"] }, forwarders: ["mail"], mailrouting: ["mail"], autoresponders: ["mail"],
+    defaultaddress: ["mail"], mailinglists: ["mail"], trackdelivery: ["mail"], globalfilters: ["mail"], emailfilters: ["mail"],
+    deliverability: ["mail"], addressimporter: ["mail"], spamfilters: ["mail"], mailtls: ["mail"], calendars: ["dav"], maildisk: ["mail"], mailqueue: ["mail"],
+  };
+  const SOFT_WHY = {
+    bind9: "Zones are saved and can be exported, but this server doesn't answer DNS for them yet.",
+    certbot: "Needed for free Let's Encrypt certificates; uploaded and self-signed certificates work without it.",
+    webmail: "Lets people read and send mail in the browser at /webmail (the “Check Email” button).",
+  };
+
+  async function requireGate(root, view, spec, render) {
+    const need = Array.isArray(spec) ? spec : spec.need || [];
+    const soft = Array.isArray(spec) ? [] : spec.soft || [];
+    const nav = state.navId;
+    const wait = el("div", { class: "loading", text: "Loading…" });
+    root.append(wait);
+    let st = null;
+    try { st = await API.requires([...need, ...soft]); } catch (e) { if (e.status === 401) return location.reload(); }
+    if (state.navId !== nav) return;  // the user already moved on
+    wait.remove();
+    const comps = (ids) => ids.map((id) => st && st.components[id]).filter((c) => c && !c.installed);
+    const again = () => { if (state.navId === nav) navigate(view, { history: "none", arg: state.viewArg }); };
+    const missing = st && st.supported ? comps(need) : [];
+    if (missing.length) { root.append(requireCard(missing, TITLES[view] || "This page", false, again)); return; }
+    const softMissing = st && st.supported ? comps(soft) : [];
+    if (softMissing.length) root.append(requireCard(softMissing, TITLES[view] || "This page", true, again));
+    render(root);
+  }
+
+  function requireCard(comps, page, soft, done) {
+    const names = comps.map((c) => c.name);
+    const list = names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : names[0];
+    const them = names.length > 1 ? "them" : "it";
+    const bar = el("div", { class: "ax-bar" }, el("span"));
+    const stage = el("div", { class: "ax-stage" });
+    const log = el("pre", { class: "log ax-log", hidden: true });
+    const logBtn = el("button", { type: "button", class: "bk-mini", text: "Show log",
+      onclick: () => { log.hidden = !log.hidden; logBtn.textContent = log.hidden ? "Show log" : "Hide log"; } });
+    const prog = el("div", { class: "ax-progress rq-progress", hidden: true }, [el("div", { class: "ax-prog-top" }, [stage, logBtn]), bar, log]);
+    const rows = comps.map((c) => {
+      const li = el("li", { class: "rq-item" }, [
+        el("span", { class: "rq-ico" }, icon(c.icon, 18)),
+        el("div", { class: "rq-txt" }, [el("b", { text: c.name }), el("span", { class: "muted", text: soft ? SOFT_WHY[c.id] || c.desc : c.desc })]),
+        el("span", { class: "rq-size", text: c.size }), el("span", { class: "rq-mark" })]);
+      return { c, li };
+    });
+    const go = el("button", { class: "btn btn-primary", text: `Install ${list}` });
+    const card = el("div", { class: `card rq${soft ? " rq-soft" : ""}` }, [
+      soft ? null : el("div", { class: "rq-head" }, [
+        el("span", { class: "rq-badge" }, icon(comps[0].icon, 26)),
+        el("div", {}, [
+          el("h3", { text: `${page} needs ${list}` }),
+          el("p", { class: "muted", text: `This server doesn't have ${them} yet. One click downloads, installs and starts ${them} — your other software and settings aren't touched.` }),
+        ]),
+      ]),
+      el("ul", { class: "rq-list" }, rows.map((r) => r.li)),
+      prog,
+      el("div", { class: "toolbar rq-actions" }, [go, soft ? null : btn("System Applications", () => navigate("sysapps"), "btn-ghost")].filter(Boolean)),
+    ].filter(Boolean));
+
+    let timer = null;
+    state.cleanups.push(() => { if (timer) clearTimeout(timer); });
+    const t0 = Date.now();
+    const watch = (r, i) => new Promise((resolve) => {
+      const tick = async () => {
+        let j;
+        try { j = await API.job(r.job); } catch (e) { timer = setTimeout(tick, 2000); return; }
+        const pct = (i + (j.status === "done" ? 1 : (j.progress || 1) / 100)) / rows.length * 100;
+        bar.firstChild.style.width = `${Math.max(2, pct)}%`;
+        const secs = (Date.now() - t0) / 1000;
+        stage.innerHTML = "";
+        stage.append(el("span", { class: "bk-spin" }), el("b", { text: j.stage || `Installing ${rows[i].c.name}…` }),
+          el("span", { class: "bk-pct", text: `${Math.floor(pct)}%` }),
+          el("span", { class: "muted", text: ` · ${Math.floor(secs / 60)}:${String(Math.floor(secs % 60)).padStart(2, "0")}` }));
+        log.textContent = j.output || ""; log.scrollTop = log.scrollHeight;
+        if (j.status === "running") { timer = setTimeout(tick, 1000); return; }
+        resolve(j);
+      };
+      tick();
+    });
+    function fail(row, msg) {
+      row.li.className = "rq-item bad";
+      prog.classList.add("bad");
+      stage.innerHTML = "";
+      stage.append(el("span", { class: "bk-badge bad", text: "!" }), el("b", { text: `${row.c.name}: ${msg.replace(/^✖\s*/, "")}` }));
+      log.hidden = false; logBtn.textContent = "Hide log";
+      card.classList.remove("busy");
+      go.disabled = false; go.textContent = "Try again";
+    }
+    const run = async (resume) => {
+      go.disabled = true; go.textContent = "Installing…";
+      prog.hidden = false; prog.classList.remove("ok", "bad");
+      card.classList.add("busy");
+      for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        if (row.li.classList.contains("done")) continue;
+        row.li.className = "rq-item on";
+        let r;
+        try { r = resume && row.c.job ? { job: row.c.job } : await API.requireInstall(row.c.id); }
+        catch (e) { return fail(row, e.message); }
+        const j = await watch(r, i);
+        if (j.status !== "done") return fail(row, (j.output || "").trim().split("\n").filter(Boolean).pop() || "Install failed");
+        row.li.className = "rq-item done";
+      }
+      prog.classList.add("ok"); bar.firstChild.style.width = "100%";
+      stage.innerHTML = "";
+      stage.append(el("span", { class: "bk-badge good", text: "✓" }), el("b", { text: `${list} ${names.length > 1 ? "are" : "is"} installed` }),
+        el("span", { class: "muted", text: ` · took ${Math.round((Date.now() - t0) / 1000)}s` }));
+      toast(`${list} installed`, "good");
+      card.classList.remove("busy");
+      go.textContent = "Opening…";
+      setTimeout(done, 1200);
+    };
+    go.onclick = () => run(false);
+    // An install already running (another tab, or before a refresh): follow it.
+    if (comps.some((c) => c.job)) setTimeout(() => run(true), 0);
+    return card;
   }
 
   async function guardedLoad(fn) {
@@ -646,6 +807,24 @@
       { label: "Domains", icon: "globe", view: "vhosts" },
       { label: "Redirects", icon: "redirect", view: "redirects" },
       { label: "Zone Editor", icon: "zone", view: "zones" },
+    ]},
+    { name: "Email", icon: "mail", tiles: [
+      { label: "Email Accounts", icon: "users", view: "mailaccounts" },
+      { label: "Forwarders", icon: "forward", view: "forwarders" },
+      { label: "Email Routing", icon: "route", view: "mailrouting" },
+      { label: "Autoresponders", icon: "reply", view: "autoresponders" },
+      { label: "Default Address", icon: "at", view: "defaultaddress" },
+      { label: "Mailing Lists", icon: "listing", view: "mailinglists" },
+      { label: "Track Delivery", icon: "pin", view: "trackdelivery" },
+      { label: "Global Email Filters", icon: "filter", view: "globalfilters" },
+      { label: "Email Filters", icon: "filter", view: "emailfilters" },
+      { label: "Email Deliverability", icon: "send", view: "deliverability" },
+      { label: "Address Importer", icon: "upload", view: "addressimporter" },
+      { label: "Spam Filters", icon: "spam", view: "spamfilters" },
+      { label: "Encryption", icon: "lock", view: "mailtls" },
+      { label: "Calendars & Contacts", icon: "calendar", view: "calendars" },
+      { label: "Email Disk Usage", icon: "disk", view: "maildisk" },
+      { label: "Webmail", icon: "inbox", ext: "/webmail/" },
     ]},
     { name: "Network", icon: "network", tiles: [
       { label: "VPN Overview", icon: "vpn", view: "vpn" },
@@ -858,14 +1037,14 @@
         <circle cx="120" cy="120" r="${R}" class="dial-fill" transform="rotate(90 120 120)" style="stroke-dasharray:${C.toFixed(1)};stroke-dashoffset:${(C * (1 - frac)).toFixed(1)}"/>
         <circle cx="120" cy="120" r="70" class="dial-core"/>
       </svg>
-      ${bcHead("flame", "Thermal", "SoC temperature")}
+      ${bcHead("flame", "Thermal", o.pi_model ? "SoC temperature" : "CPU temperature")}
       <div class="bc-body">
         <div class="bc-big ${hot ? "is-hot" : ""}">${t != null ? t.toFixed(1) : "—"}<small>°C</small></div>
-        <div class="bc-sub">${throttled ? "⚠ Throttled (" + esc(o.throttled) + ")" : hist.length > 1 ? `Low ${Math.min(...hist).toFixed(0)}° · High ${Math.max(...hist).toFixed(0)}°` : "No throttling"}</div>
+        <div class="bc-sub">${t == null ? "No temperature sensor (normal on a virtual server)" : throttled ? "⚠ Throttled (" + esc(o.throttled) + ")" : hist.length > 1 ? `Low ${Math.min(...hist).toFixed(0)}° · High ${Math.max(...hist).toFixed(0)}°` : "No throttling"}</div>
       </div>
       <div class="bc-foot">
         <span class="chip">${I("processes", 12)} ${o.cpu.freq_mhz ? o.cpu.freq_mhz.toFixed(0) + " MHz" : "—"}</span>
-        <span class="chip ${throttled ? "chip-bad" : ""}">${throttled ? "throttled" : "nominal"}</span>
+        <span class="chip ${throttled ? "chip-bad" : ""}">${t == null ? "n/a" : throttled ? "throttled" : "nominal"}</span>
       </div>`;
   }
 
@@ -1499,6 +1678,12 @@
     root.append(banner, tabs, body);
     let tabCleanups = [];
     NET_TABS.forEach(([k, l, ic]) => tabs.append(el("button", { type: "button", "data-t": k, class: k === netView.tab ? "active" : "", onclick: () => show(k) }, [icon(ic, 14), " ", l])));
+    // Without NetworkManager (Ubuntu servers, VPSs) there's no Wi-Fi, hotspot or IP setting to manage here.
+    API.netOverview().then((o) => {
+      if (o.nm) return;
+      tabs.querySelectorAll('[data-t="wifi"], [data-t="hotspot"], [data-t="ip"]').forEach((b) => b.remove());
+      if (["wifi", "hotspot", "ip"].includes(netView.tab)) show("overview");
+    }).catch(() => {});
     function show(k) {
       tabCleanups.forEach((f) => { try { f(); } catch (e) {} }); tabCleanups = [];
       netView.tab = k;
@@ -1552,13 +1737,14 @@
         tile("link", "You're connected via", o.panel_iface || "?", o.panel_ip || ""),
         tile("network", "Gateway (router)", o.gateway ? o.gateway.ip : "—", o.gateway ? `via ${o.gateway.device}` : ""),
         tile("dns", "DNS servers", o.dns.join(", ") || "—", ""));
-      if (!o.nm) top.append(el("div", { class: "dm-note", style: "grid-column:1/-1" }, [icon("error", 15), el("span", { text: "NetworkManager (nmcli) isn't available here, so Wi-Fi / IP / hotspot controls are disabled." })]));
+      if (!o.nm) top.append(el("div", { class: "dm-note", style: "grid-column:1/-1" }, [icon("info", 15), el("span", { text: "This machine's network is set up with netplan / systemd-networkd (normal on Ubuntu servers and VPSs), so it's shown read-only here. Wi-Fi, hotspot and IP changes need NetworkManager." })]));
       o.devices.forEach((d) => {
         const c = o.connections.find((x) => x.device === d.device);
         top.append(el("div", { class: "card net-dev" }, [
           el("span", { class: `net-dot ${/^connected/.test(d.state) ? "on" : ""}` }),
           el("div", {}, [el("b", { text: `${d.device} · ${d.type}` }), el("span", { class: "muted", text: `${d.state}${d.connection ? " · " + d.connection : ""}` }),
-            c ? el("span", { class: "dm-hint", text: `${(c.live_addresses[0] || "no address")} · ${c.method === "manual" ? "static" : "DHCP"}` }) : null]),
+            c ? el("span", { class: "dm-hint", text: `${(c.live_addresses[0] || "no address")} · ${c.method === "manual" ? "static" : "DHCP"}` })
+              : d.addresses ? el("span", { class: "dm-hint", text: d.addresses.join(", ") || "no address" }) : null]),
         ]));
       });
     }).catch((e) => { top.innerHTML = ""; top.append(el("p", { class: "empty", text: e.message })); });
@@ -1825,7 +2011,11 @@
     const panel = el("div", { class: "card", style: "margin-top:16px", hidden: true });
     const title = el("h3", {});
     const pre = el("pre", { class: "log" });
-    panel.append(title, pre);
+    // apt installs report progress: show the orange bar (as in App Installer) above the log.
+    const bar = el("div", { class: "ax-bar" }, el("span"));
+    const stage = el("div", { class: "ax-stage" });
+    const prog = el("div", { class: "ax-progress", hidden: true, style: "margin-bottom:12px" }, [stage, bar]);
+    panel.append(title, prog, pre);
     root.append(panel);
 
     let timer = null;
@@ -1836,12 +2026,24 @@
         panel.hidden = false;
         title.textContent = label || "Working…";
         pre.textContent = "Starting…";
+        prog.hidden = true; prog.classList.remove("ok", "bad");
         const tick = async () => {
           try {
             const j = await API.job(jobId);
             pre.textContent = j.output || "(no output yet)";
             pre.scrollTop = pre.scrollHeight;
             title.textContent = `${j.title} — ${j.status}${j.status !== "running" ? ` (exit ${j.returncode})` : ""}`;
+            if (j.progress != null) {
+              prog.hidden = false;
+              const pct = j.status === "done" ? 100 : j.progress;
+              bar.firstChild.style.width = `${Math.max(2, pct)}%`;
+              prog.classList.toggle("ok", j.status === "done");
+              prog.classList.toggle("bad", j.status === "failed");
+              stage.innerHTML = "";
+              stage.append(j.status === "running" ? el("span", { class: "bk-spin" }) : el("span", { class: `bk-badge ${j.status === "done" ? "good" : "bad"}`, text: j.status === "done" ? "✓" : "!" }),
+                el("b", { text: j.status === "running" ? j.stage || "Working…" : j.status === "done" ? "Finished" : "Failed" }),
+                el("span", { class: "bk-pct", text: `${Math.floor(pct)}%` }));
+            }
             if (j.status !== "running") {
               stop();
               toast(`${j.title}: ${j.status}`, j.status === "done" ? "good" : "bad");
@@ -3051,10 +3253,10 @@
         info.innerHTML = ""; current = d;
         if (!d.available) { info.append(el("p", { class: "empty", text: "The image library isn't installed on this Pi (pip install Pillow)." })); return; }
         if (d.type === "folder") {
-          info.append(el("p", { class: "muted", text: `${d.count} image(s) in /${d.path}` }), d.images.length ? el("div", { class: "net-chips" }, d.images.slice(0, 60).map((i) =>
-            el("button", { type: "button", class: "net-chip", text: `${i.name} (${fmtBytes(i.size)})`, onclick: () => { pathIn.value = (d.path ? d.path + "/" : "") + i.name; look(); } }))) : null);
+          info.append(el("p", { class: "muted", text: `${d.count} image(s) in ${("/" + d.path).replace(/^\/+/, "/")}` }), d.images.length ? el("div", { class: "net-chips" }, d.images.slice(0, 60).map((i) =>
+            el("button", { type: "button", class: "net-chip", text: `${i.name} (${fmtBytes(i.size)})`, onclick: () => { pathIn.value = (d.path ? d.path + "/" : "") + i.name; look(); } }))) : "");
         } else {
-          info.append(kv([["Image", "/" + d.path], ["Size", `${d.width} × ${d.height} px`], ["Format", d.format], ["File size", fmtBytes(d.size)]]));
+          info.append(kv([["Image", ("/" + d.path).replace(/^\/+/, "/")], ["Size", `${d.width} × ${d.height} px`], ["Format", d.format], ["File size", fmtBytes(d.size)]]));
         }
         draw();
       } catch (e) { info.innerHTML = ""; info.append(el("p", { class: "empty", text: e.message })); }
@@ -5779,9 +5981,39 @@
         ]))),
       ])));
     }
-    const load = async () => { await guardedLoad(async () => { data = await API.dnsZones(); bannerBox.innerHTML = ""; bannerBox.append(zoneBanner(data.bind_installed)); render(); }); };
+    const secBox = el("div");
+    root.append(secBox);
+    const load = async () => { await guardedLoad(async () => { data = await API.dnsZones(); bannerBox.innerHTML = ""; bannerBox.append(zoneBanner(data.bind_installed)); render(); if (data.bind_installed) secondaryCard(secBox); }); };
     search.addEventListener("input", render);
     state.refreshHandler = load; load();
+  }
+
+  // Secondary DNS: who may copy our zones (zone transfers). Detected from the zones' NS
+  // records; a provider's fetching address that isn't a nameserver shows up as "refused".
+  async function secondaryCard(box) {
+    let d;
+    try { d = await API.dnsSecondaries(); } catch (e) { return; }
+    box.innerHTML = "";
+    const extra = el("input", { type: "text", value: d.extra.join(", "), placeholder: "e.g. 195.88.209.83" });
+    const autoSw = sw(d.auto, () => {});
+    const save = async (ex) => {
+      try {
+        await API.dnsSecondariesSet(autoSw.querySelector("input").checked, (ex || extra.value).split(/[\s,;]+/).filter(Boolean));
+        toast("Secondary DNS saved", "good"); secondaryCard(box);
+      } catch (e) { toast(e.message, "bad"); }
+    };
+    const det = Object.entries(d.detected);
+    box.append(el("div", { class: "card", style: "margin-top:16px" }, [
+      el("h3", { text: "Secondary DNS (zone transfers)" }),
+      el("p", { class: "muted", style: "margin:0 0 12px", text: "Servers allowed to copy your zones — e.g. your hosting provider's DNS when this server is the master. They're told at once whenever a zone changes. Everyone else is refused, and this server only answers lookups for itself, its local network and VPN clients." }),
+      el("div", { class: "em-toggle" }, [autoSw, el("div", {}, [el("b", { text: "Detect automatically from NS records (recommended)" }),
+        el("span", { class: "muted", text: det.length ? det.map(([h, ips]) => `${h} (${ips.join(", ")})`).join(" · ") : "No other nameservers in your zones yet." })])]),
+      field("Also allow these IP addresses", extra, "Comma separated. For providers that fetch from an address that isn't one of their nameservers."),
+      ...d.refused.map((r) => el("div", { class: "dm-note" }, [icon("info", 15), el("span", { text: `${r.ip} tried to copy ${r.zones.join(", ")} and was refused.` }),
+        btn("Allow it", () => save([...d.extra, r.ip].join(",")), "btn-primary")])),
+      el("div", { class: "toolbar", style: "margin:12px 0 0" }, [btn("Save", () => save(), "btn-primary"),
+        el("span", { class: "muted", text: d.allowed.length ? `Allowed now: ${d.allowed.join(", ")}` : "Nobody may copy zones right now." })]),
+    ]));
   }
 
   function viewZoneManage(root, domain) {
@@ -7581,6 +7813,16 @@
     }
     function render() { drawSteps(); content.innerHTML = ""; [stepWhere, stepDetails, stepInstall][step](); drawFoot(); }
     (async () => { try { st = await appStatus(); } catch (e) {} render(); })();
+  }
+
+  // ---- Email views (frontend/js/mail.js, loaded before this file) ----
+  let MAILV = null;
+  function mailViews() {
+    if (!MAILV && window.AuroraMail) {
+      MAILV = window.AuroraMail({ el, $, icon, btn, pill, kv, field, sw, toast, API, navigate, state, openModal, closeModal, copyText,
+        genPassword, fmtBytes, ago, downloadText, esc, requireCard, jobPanel });
+    }
+    return MAILV || {};
   }
 
   // ---- go ----

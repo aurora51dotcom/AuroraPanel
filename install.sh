@@ -3,6 +3,7 @@
 #
 #   sudo bash install.sh                 # interactive: asks which port
 #   sudo bash install.sh --port 9000     # non-interactive
+#   sudo bash install.sh --no-https      # new install on plain HTTP (HTTPS is the default)
 #   sudo bash install.sh --uninstall     # remove AuroraPanel completely (asks first)
 #
 # Installs in place (the folder this script lives in): creates .venv, installs
@@ -19,6 +20,7 @@ APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ORIG_ARGS=("$@")
 PORT=""
 ASSUME_YES=0
+NO_HTTPS=0
 UNINSTALL=0
 
 c_ok=$'\e[32m'; c_warn=$'\e[33m'; c_err=$'\e[31m'; c_hi=$'\e[1;38;5;208m'; c_off=$'\e[0m'
@@ -38,6 +40,7 @@ while [ $# -gt 0 ]; do
     -p|--port)   PORT="${2:-}"; shift 2 ;;
     --port=*)    PORT="${1#*=}"; shift ;;
     -y|--yes)    ASSUME_YES=1; shift ;;
+    --no-https)  NO_HTTPS=1; shift ;;
     --uninstall) UNINSTALL=1; shift ;;
     -h|--help)   usage ;;
     *) die "Unknown option: $1 (try --help)" ;;
@@ -205,7 +208,9 @@ command -v systemctl >/dev/null || die "systemd is required."
 # --- port -------------------------------------------------------------------
 # Default to the currently-installed port on a re-run.
 CURRENT_PORT=""
+FRESH=1
 if [ -f "$UNIT" ]; then
+  FRESH=0
   CURRENT_PORT="$(sed -n 's/^Environment=PORT=\([0-9]*\).*/\1/p' "$UNIT" | head -n1)"
 fi
 SUGGESTED="${CURRENT_PORT:-$DEFAULT_PORT}"
@@ -256,6 +261,7 @@ command -v python3 >/dev/null || NEED+=(python3)
 python3 -c 'import venv, ensurepip' 2>/dev/null || NEED+=(python3-venv)
 command -v ss >/dev/null || NEED+=(iproute2)
 command -v curl >/dev/null || NEED+=(curl)
+command -v openssl >/dev/null || NEED+=(openssl)
 if [ ${#NEED[@]} -gt 0 ]; then
   command -v apt-get >/dev/null || die "Missing: ${NEED[*]} — install them and re-run."
   say "Installing: ${NEED[*]}"
@@ -304,6 +310,17 @@ if [ -f "$DDNS_UNIT" ] && ! grep -qxF "WorkingDirectory=${APP_DIR}" "$DDNS_UNIT"
   ok "Dynamic DNS now runs from ${APP_DIR}"
 fi
 systemctl reset-failed "$SERVICE" 2>/dev/null || true
+
+# --- panel HTTPS --------------------------------------------------------------
+# New installs start on HTTPS with a self-signed certificate (turn it off under
+# Security → Panel HTTPS). Updates and re-runs keep whatever was chosen before.
+if [ $FRESH = 1 ] && [ $NO_HTTPS = 0 ] && [ ! -f "$DROPIN" ]; then
+  if .venv/bin/python -c 'from backend import panelhttps; panelhttps.install_default()'; then
+    ok "Panel HTTPS is on (self-signed certificate)"
+  else
+    warn "Couldn't create the panel's certificate — it runs on plain HTTP for now (Security → Panel HTTPS)"
+  fi
+fi
 
 # --- systemd unit -----------------------------------------------------------
 say "Writing ${UNIT}"
@@ -376,10 +393,15 @@ echo "${c_hi}  AuroraPanel is installed!${c_off}"
 echo
 echo "  Open it from a browser on your network:"
 for ip in $IPS; do echo "    ${SCHEME}://${ip}:${PORT}"; done
-echo "    ${SCHEME}://$(hostname).local:${PORT}"
+systemctl is-active --quiet avahi-daemon 2>/dev/null && echo "    ${SCHEME}://$(hostname).local:${PORT}"
 echo
 if [ ! -f "$APP_DIR/aurora_config.json" ]; then
   echo "  First visit: you'll be asked to create your admin account."
+fi
+if [ "$SCHEME" = https ] && [ $FRESH = 1 ]; then
+  echo "  The panel uses HTTPS with a self-signed certificate: your browser warns once"
+  echo "  (\"Not private\") — choose Advanced → Proceed. The connection is encrypted."
+  echo "  Turn HTTPS off or use a Let's Encrypt certificate: Security → Panel HTTPS."
 fi
 echo "  Change the port later:  sudo bash ${APP_DIR}/install.sh"
 echo "  Logs:                   sudo journalctl -u ${SERVICE} -f"

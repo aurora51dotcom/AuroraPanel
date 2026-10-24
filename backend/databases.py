@@ -277,16 +277,11 @@ def phpmyadmin_install() -> jobs.Job:
         raise DatabaseError("phpMyAdmin needs Apache — install it in System Applications first")
 
     def fn(log):
-        env = {"DEBIAN_FRONTEND": "noninteractive", "PATH": "/usr/sbin:/usr/bin:/sbin:/bin"}
         seed = ("phpmyadmin phpmyadmin/reconfigure-webserver multiselect apache2\n"
                 "phpmyadmin phpmyadmin/dbconfig-install boolean true\n")
         subprocess.run(["debconf-set-selections"], input=seed, text=True, capture_output=True, timeout=30)
         log("• Installing phpMyAdmin (apt-get install phpmyadmin)…")
-        r = subprocess.run(["apt-get", "-o", "DPkg::Lock::Timeout=600", "-y", "install", "phpmyadmin"],
-                           capture_output=True, text=True, timeout=1800, env=env)
-        for line in (r.stdout + r.stderr).splitlines()[-25:]:
-            log(line)
-        if r.returncode != 0:
+        if log.apt(["install", "phpmyadmin"], (2, 95)) != 0:
             raise DatabaseError("apt-get install phpmyadmin failed")
         if not Path("/etc/apache2/conf-enabled/phpmyadmin.conf").exists() and Path("/etc/apache2/conf-available/phpmyadmin.conf").exists():
             subprocess.run(["a2enconf", "phpmyadmin"], capture_output=True, text=True, timeout=30)
@@ -677,12 +672,8 @@ def phppgadmin_set_lan(on: bool) -> dict:
 def phppgadmin_install() -> jobs.Job:
     """apt install phppgadmin, then open it to the local network."""
     def fn(log):
-        env = {"DEBIAN_FRONTEND": "noninteractive", "PATH": "/usr/sbin:/usr/bin:/sbin:/bin"}
         log("• Installing phpPgAdmin (apt-get install phppgadmin php-pgsql)…")
-        r = subprocess.run(["apt-get", "-o", "DPkg::Lock::Timeout=600", "-y", "install", "phppgadmin", "php-pgsql"],
-                           capture_output=True, text=True, env=env, timeout=1800)
-        log(r.stdout[-3000:] + r.stderr[-1500:])
-        if r.returncode != 0:
+        if log.apt(["install", "phppgadmin", "php-pgsql"], (2, 95)) != 0:
             raise DatabaseError("apt-get install failed")
         log("• Allowing access from your local network…")
         phppgadmin_set_lan(True)

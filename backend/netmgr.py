@@ -86,7 +86,27 @@ def overview(panel_host: str | None = None) -> dict:
     panel_if = _iface_for_ip(panel_host)
     res = {"nm": nm_ok, "hostname": socket.gethostname(), "panel_iface": panel_if, "panel_ip": panel_host,
            "devices": [], "connections": [], "pending": pending_status(), "gateway": None, "dns": []}
+    r = _run(["ip", "-4", "route", "show", "default"])
+    m = re.search(r"default via (\S+) dev (\S+)", r.stdout)
+    if m:
+        res["gateway"] = {"ip": m.group(1), "device": m.group(2)}
+    # systemd-resolved (Ubuntu) puts its 127.0.0.53 stub in /etc/resolv.conf; the real servers are here.
+    for f in ("/run/systemd/resolve/resolv.conf", "/etc/resolv.conf"):
+        try:
+            res["dns"] = [l.split()[1] for l in Path(f).read_text().splitlines() if l.startswith("nameserver") and len(l.split()) > 1]
+        except OSError:
+            continue
+        if res["dns"]:
+            break
     if not nm_ok:
+        # Servers configured with netplan / systemd-networkd: show the interfaces read-only.
+        for line in _run(["ip", "-br", "-4", "addr"]).stdout.splitlines():
+            parts = line.split()
+            if len(parts) >= 2 and parts[0] != "lo":
+                name = parts[0].split("@")[0]
+                res["devices"].append({"device": name, "type": "wifi" if Path(f"/sys/class/net/{name}/wireless").exists() else "ethernet",
+                                       "state": "connected" if parts[1] in ("UP", "UNKNOWN") else parts[1].lower(),
+                                       "connection": None, "addresses": parts[2:]})
         return res
     for d in _nmt("-f", "DEVICE,TYPE,STATE,CONNECTION", "device", "status"):
         if len(d) >= 4 and d[1] not in ("loopback", "wifi-p2p"):
@@ -96,14 +116,6 @@ def overview(panel_host: str | None = None) -> dict:
             info = connection(c[1])
             res["connections"].append({"name": c[0], "uuid": c[1], "type": _ctype(c[2]), "device": c[3] or None,
                                        "active": c[4] == "yes", "autoconnect": c[5] == "yes", **info})
-    r = _run(["ip", "-4", "route", "show", "default"])
-    m = re.search(r"default via (\S+) dev (\S+)", r.stdout)
-    if m:
-        res["gateway"] = {"ip": m.group(1), "device": m.group(2)}
-    try:
-        res["dns"] = [l.split()[1] for l in Path("/etc/resolv.conf").read_text().splitlines() if l.startswith("nameserver")]
-    except OSError:
-        pass
     return res
 
 

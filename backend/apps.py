@@ -456,11 +456,12 @@ def _ensure_php(app: dict, log) -> str:
     if missing:
         pkgs = sorted({f"php{ver}-{EXT_PKG.get(e, e)}" if ver else f"php-{EXT_PKG.get(e, e)}" for e in missing})
         log(f"• Installing PHP extensions: {', '.join(pkgs)}…")
-        env = {**os.environ, "DEBIAN_FRONTEND": "noninteractive"}
-        r = _run(["apt-get", "-y", "-o", "DPkg::Lock::Timeout=600", "install", *pkgs], 900, env)
+        rc = log.apt(["install", *pkgs], (1, 7)) if hasattr(log, "apt") else _run(
+            ["apt-get", "-y", "-o", "DPkg::Lock::Timeout=600", "install", *pkgs], 900,
+            {**os.environ, "DEBIAN_FRONTEND": "noninteractive"}).returncode
         still = [e for e in app.get("exts_required", app.get("exts", [])) if e not in _php_modules(php)]
-        if r.returncode != 0 and still:
-            raise AppError("Couldn't install required PHP extensions:\n" + (r.stderr or r.stdout)[-800:])
+        if rc != 0 and still:
+            raise AppError("Couldn't install required PHP extensions (see the log)")
         if still:
             raise AppError("Still missing PHP extensions: " + ", ".join(still))
         _run(["systemctl", "reload", "apache2"])

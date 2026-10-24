@@ -4,9 +4,9 @@ from backend import auth, config
 
 
 def test_status_before_and_after_setup(client):
-    assert client.get("/api/status").json() == {"initialized": False}
+    assert client.get("/api/status").json()["initialized"] is False
     assert client.post("/api/setup", json={"username": ADMIN, "password": PASSWORD}).status_code == 200
-    assert client.get("/api/status").json() == {"initialized": True}
+    assert client.get("/api/status").json()["initialized"] is True
 
 
 def test_setup_rules(client):

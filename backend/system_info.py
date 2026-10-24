@@ -40,6 +40,10 @@ def _cpu_temperature() -> float | None:
     return None
 
 
+def is_pi() -> bool:
+    return "raspberry pi" in (_pi_model() or "").lower()
+
+
 def _pi_model() -> str | None:
     model_file = Path("/proc/device-tree/model")
     if model_file.exists():

@@ -8,6 +8,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import threading
 import time
 from pathlib import Path
@@ -17,9 +18,10 @@ from fastapi import (
     WebSocket, WebSocketDisconnect,
 )
 from fastapi.responses import (
-    FileResponse, HTMLResponse, JSONResponse, StreamingResponse,
+    FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse,
 )
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel
 
 from . import (
@@ -27,7 +29,7 @@ from . import (
     apps, databases, diskusage, dnszones, domains, fail2ban, netmgr, sites, files, firewall, ipblocker, jobs,
     modsecurity, netdiag, packages, perms, phpmgr, services, sslcerts, sshaccess,
     sysapps, system_info, terminal, twofa, users,
-    appconfig, ddns, ftp, gitvc, guard, images, ipsec, webaccess, netmon, openvpn, panelhttps, phpsettings, portcheck, version, vpncommon, wireguard,
+    appconfig, ddns, ftp, gitvc, guard, images, ipsec, webaccess, netmon, openvpn, mail, panelhttps, phpsettings, portcheck, requires, version, vpncommon, wireguard,
 )
 
 # The API schema is a full map of every endpoint, so it's off unless asked for.
@@ -55,6 +57,20 @@ def _frontend_build() -> str:
 
 
 FRONTEND_BUILD = _frontend_build()
+
+
+class _GZipFrontend(GZipMiddleware):
+    """Compress the panel's own HTML/JS/CSS (app.js shrinks about 5×, which matters when
+    the server is across the internet), but never API streams, downloads or uploads."""
+
+    async def __call__(self, scope, receive, send):
+        path = scope.get("path", "") if scope["type"] == "http" else ""
+        if path == "/" or (not path.startswith("/api/") and path.endswith((".js", ".css", ".html", ".svg"))):
+            return await super().__call__(scope, receive, send)
+        return await self.app(scope, receive, send)
+
+
+app.add_middleware(_GZipFrontend, minimum_size=1024)
 
 
 @app.middleware("http")
@@ -135,8 +151,9 @@ class MkdirBody(BaseModel):
 # --------------------------------------------------------------------------- #
 @app.get("/api/status")
 def api_status():
-    """Public: tells the frontend whether first-run setup is needed."""
-    return {"initialized": config.is_initialized()}
+    """Public: whether first-run setup is needed, and whether this is a Raspberry Pi
+    (the interface says "server" instead of "Pi" on other machines)."""
+    return {"initialized": config.is_initialized(), "pi": system_info.is_pi()}
 
 
 @app.post("/api/setup")
@@ -1779,6 +1796,24 @@ def api_zones(user: str = auth.CurrentUser):
     return domains.zones()
 
 
+class SecondariesBody(BaseModel):
+    auto: bool = True
+    extra: list[str] = []
+
+
+@app.get("/api/dns/secondaries")
+def api_dns_secondaries(user: str = auth.CurrentUser):
+    return dnszones.secondary_settings()
+
+
+@app.post("/api/dns/secondaries")
+def api_dns_secondaries_set(body: SecondariesBody, user: str = auth.CurrentUser):
+    try:
+        return dnszones.set_secondaries(body.auto, body.extra)
+    except dnszones.ZoneError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @app.get("/api/domains/zone")
 def api_zone(name: str, user: str = auth.CurrentUser):
     try:
@@ -2155,6 +2190,374 @@ def api_php_ext_install(body: PHPExtBody, user: str = auth.CurrentUser):
 @app.post("/api/php/apache-version")
 def api_php_apache_version(body: PHPBody, user: str = auth.CurrentUser):
     return _php_call(lambda: phpsettings.set_apache_version(body.version))
+
+
+# --------------------------------------------------------------------------- #
+# Email
+# --------------------------------------------------------------------------- #
+def _mail(fn, *a, **k):
+    try:
+        return fn(*a, **k)
+    except mail.MailError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+class MailDomainBody(BaseModel):
+    domain: str
+    routing: str | None = None
+    mode: str | None = None
+    target: str = ""
+    message: str = ""
+
+
+class MailAccountBody(BaseModel):
+    address: str
+    password: str | None = None
+    quota_mb: int | None = None
+    name: str | None = None
+    suspend: dict | None = None
+    delete_mail: bool = False
+
+
+class MailForwarderBody(BaseModel):
+    source: str
+    kind: str = "forward"
+    dest: str = ""
+    message: str = ""
+
+
+class MailOwnerBody(BaseModel):
+    owner: str
+    data: dict = {}
+    filters: list = []
+
+
+class MailListBody(BaseModel):
+    address: str
+    data: dict = {}
+    create: bool = False
+
+
+class MailQueueBody(BaseModel):
+    action: str
+    ids: list[str] = []
+
+
+class MailImportBody(BaseModel):
+    kind: str
+    text: str
+    dry_run: bool = True
+    default_domain: str = ""
+    quota_mb: int = 1024
+
+
+class MailExpungeBody(BaseModel):
+    address: str
+    mailbox: str
+    older_days: int = 0
+
+
+class MailValueBody(BaseModel):
+    value: str = ""
+    to: str = ""
+    sender: str = ""
+
+
+@app.get("/api/mail/status")
+def api_mail_status(user: str = auth.CurrentUser):
+    ok, why = mail.dovecot_ok() if mail.IS_LINUX else (True, "")
+    return {**mail.status(), "dovecot_supported": ok, "dovecot_why": why}
+
+
+@app.get("/api/mail/domains")
+def api_mail_domains(user: str = auth.CurrentUser):
+    s = mail.load()
+    return {"domains": [{"domain": d, "routing": v.get("routing", "local"), "catchall": v.get("catchall", {}),
+                         "forward_to": s["domain_forwarders"].get(d),
+                         "accounts": sum(1 for a in s["accounts"] if a.endswith("@" + d))} for d, v in sorted(s["domains"].items())],
+            "candidates": mail.candidate_domains(), "hostname": mail.hostname(s)}
+
+
+@app.post("/api/mail/domains/add")
+def api_mail_domain_add(body: MailDomainBody, user: str = auth.CurrentUser):
+    return _mail(mail.add_domain, body.domain)
+
+
+@app.post("/api/mail/domains/remove")
+def api_mail_domain_remove(body: MailDomainBody, user: str = auth.CurrentUser):
+    return _mail(mail.remove_domain, body.domain)
+
+
+@app.post("/api/mail/domains/routing")
+def api_mail_routing(body: MailDomainBody, user: str = auth.CurrentUser):
+    return _mail(mail.set_routing, body.domain, body.routing or "local")
+
+
+@app.get("/api/mail/domains/routing")
+def api_mail_routing_get(domain: str, user: str = auth.CurrentUser):
+    def get():
+        d = mail._domain(domain)
+        dom = mail.load()["domains"].get(d, {"routing": "local"})
+        return {"domain": d, "routing": dom.get("routing", "local"), "effective": mail._effective_routing(d, dom),
+                "mx": mail._mx(d), "hostname": mail.hostname()}
+    return _mail(get)
+
+
+@app.post("/api/mail/domains/catchall")
+def api_mail_catchall(body: MailDomainBody, user: str = auth.CurrentUser):
+    return _mail(mail.set_catchall, body.domain, body.mode or "fail", body.target, body.message)
+
+
+@app.get("/api/mail/accounts")
+def api_mail_accounts(user: str = auth.CurrentUser):
+    return mail.list_accounts()
+
+
+@app.post("/api/mail/accounts/create")
+def api_mail_account_create(body: MailAccountBody, user: str = auth.CurrentUser):
+    return _mail(mail.create_account, body.address, body.password or "", body.quota_mb if body.quota_mb is not None else 1024, body.name or "")
+
+
+@app.post("/api/mail/accounts/update")
+def api_mail_account_update(body: MailAccountBody, user: str = auth.CurrentUser):
+    return _mail(mail.update_account, body.address, body.password, body.quota_mb, body.suspend, body.name)
+
+
+@app.post("/api/mail/accounts/delete")
+def api_mail_account_delete(body: MailAccountBody, user: str = auth.CurrentUser):
+    return _mail(mail.delete_account, body.address, body.delete_mail)
+
+
+@app.get("/api/mail/accounts/device")
+def api_mail_device(address: str, user: str = auth.CurrentUser):
+    return _mail(mail.device_settings, address)
+
+
+@app.get("/api/mail/accounts/mobileconfig")
+def api_mail_mobileconfig(address: str, user: str = auth.CurrentUser):
+    text = _mail(mail.mobileconfig, address)
+    name = re.sub(r"[^A-Za-z0-9._-]", "_", address)
+    return Response(text, media_type="application/x-apple-aspen-config",
+                    headers={"Content-Disposition": f'attachment; filename="{name}.mobileconfig"'})
+
+
+@app.get("/api/mail/password")
+def api_mail_password(user: str = auth.CurrentUser):
+    return {"password": mail.gen_password()}
+
+
+@app.get("/api/mail/forwarders")
+def api_mail_forwarders(user: str = auth.CurrentUser):
+    return mail.list_forwarders()
+
+
+@app.post("/api/mail/forwarders/add")
+def api_mail_forwarder_add(body: MailForwarderBody, user: str = auth.CurrentUser):
+    return _mail(mail.add_forwarder, body.source, body.kind, body.dest, body.message)
+
+
+@app.post("/api/mail/forwarders/delete")
+def api_mail_forwarder_delete(body: MailForwarderBody, user: str = auth.CurrentUser):
+    return _mail(mail.delete_forwarder, body.source, body.dest or None)
+
+
+@app.post("/api/mail/forwarders/domain")
+def api_mail_domain_forwarder(body: MailForwarderBody, user: str = auth.CurrentUser):
+    if body.kind == "delete":
+        return _mail(mail.delete_domain_forwarder, body.source)
+    return _mail(mail.add_domain_forwarder, body.source, body.dest)
+
+
+@app.get("/api/mail/trace")
+def api_mail_trace(address: str, user: str = auth.CurrentUser):
+    return _mail(mail.trace, address)
+
+
+@app.get("/api/mail/autoresponders")
+def api_mail_autoresponders(user: str = auth.CurrentUser):
+    return mail.list_autoresponders()
+
+
+@app.post("/api/mail/autoresponders/save")
+def api_mail_autoresponder_save(body: MailOwnerBody, user: str = auth.CurrentUser):
+    return _mail(mail.set_autoresponder, body.owner, body.data)
+
+
+@app.post("/api/mail/autoresponders/delete")
+def api_mail_autoresponder_delete(body: MailOwnerBody, user: str = auth.CurrentUser):
+    return _mail(mail.delete_autoresponder, body.owner)
+
+
+@app.get("/api/mail/filters")
+def api_mail_filters(owner: str = "global", user: str = auth.CurrentUser):
+    return _mail(mail.get_filters, owner)
+
+
+@app.post("/api/mail/filters")
+def api_mail_filters_save(body: MailOwnerBody, user: str = auth.CurrentUser):
+    return _mail(mail.save_filters, body.owner, body.filters)
+
+
+@app.get("/api/mail/spam")
+def api_mail_spam(owner: str = "global", user: str = auth.CurrentUser):
+    return _mail(mail.get_spam, owner)
+
+
+@app.post("/api/mail/spam")
+def api_mail_spam_save(body: MailOwnerBody, user: str = auth.CurrentUser):
+    return _mail(mail.set_spam, body.owner, body.data)
+
+
+@app.get("/api/mail/lists")
+def api_mail_lists(user: str = auth.CurrentUser):
+    return mail.list_lists()
+
+
+@app.post("/api/mail/lists/save")
+def api_mail_list_save(body: MailListBody, user: str = auth.CurrentUser):
+    return _mail(mail.save_list, body.address, body.data, body.create)
+
+
+@app.post("/api/mail/lists/delete")
+def api_mail_list_delete(body: MailListBody, user: str = auth.CurrentUser):
+    return _mail(mail.delete_list, body.address)
+
+
+@app.get("/api/mail/track")
+def api_mail_track(q: str = "", status: str = "", hours: int = 168, user: str = auth.CurrentUser):
+    return _mail(mail.track, q, status, hours)
+
+
+@app.get("/api/mail/queue")
+def api_mail_queue(user: str = auth.CurrentUser):
+    return mail.queue()
+
+
+@app.post("/api/mail/queue")
+def api_mail_queue_action(body: MailQueueBody, user: str = auth.CurrentUser):
+    return _mail(mail.queue_action, body.action, body.ids)
+
+
+@app.get("/api/mail/deliverability")
+def api_mail_deliverability(domain: str = "", user: str = auth.CurrentUser):
+    return _mail(mail.deliverability, domain) if domain else _mail(mail.deliverability_all)
+
+
+@app.post("/api/mail/deliverability/install")
+def api_mail_deliverability_install(body: MailDomainBody, user: str = auth.CurrentUser):
+    try:
+        return _mail(mail.install_record, body.domain, body.mode or "")
+    except Exception as exc:  # zone errors come from dnszones
+        if isinstance(exc, HTTPException):
+            raise
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/mail/disk")
+def api_mail_disk(address: str = "", user: str = auth.CurrentUser):
+    return _mail(mail.disk_usage, address) if address else mail.disk_overview()
+
+
+@app.post("/api/mail/disk/expunge")
+def api_mail_expunge(body: MailExpungeBody, user: str = auth.CurrentUser):
+    return _mail(mail.expunge, body.address, body.mailbox, body.older_days)
+
+
+@app.post("/api/mail/import")
+def api_mail_import(body: MailImportBody, user: str = auth.CurrentUser):
+    return _mail(mail.import_csv, body.kind, body.text, body.dry_run, body.default_domain, body.quota_mb)
+
+
+@app.get("/api/mail/export")
+def api_mail_export(kind: str = "accounts", user: str = auth.CurrentUser):
+    return Response(mail.export_csv("forwarders" if kind == "forwarders" else "accounts"), media_type="text/csv",
+                    headers={"Content-Disposition": f'attachment; filename="email-{kind}.csv"'})
+
+
+@app.get("/api/mail/tls")
+def api_mail_tls(user: str = auth.CurrentUser):
+    return mail.get_tls()
+
+
+@app.post("/api/mail/tls")
+def api_mail_tls_set(body: MailValueBody, user: str = auth.CurrentUser):
+    return _mail(mail.set_tls, body.value or "self")
+
+
+@app.post("/api/mail/tls/issue")
+def api_mail_tls_issue(user: str = auth.CurrentUser):
+    return {"job": _mail(mail.issue_cert).id}
+
+
+@app.post("/api/mail/hostname")
+def api_mail_hostname(body: MailValueBody, user: str = auth.CurrentUser):
+    return _mail(mail.set_hostname, body.value)
+
+
+class DavBody(BaseModel):
+    owner: str
+    id: str = ""
+    kind: str = "calendar"
+    name: str = ""
+    color: str = ""
+    description: str = ""
+    with_: str = ""
+    write: bool = False
+
+
+@app.get("/api/mail/dav")
+def api_mail_dav(user: str = auth.CurrentUser):
+    return mail.list_collections()
+
+
+@app.post("/api/mail/dav/create")
+def api_mail_dav_create(body: DavBody, user: str = auth.CurrentUser):
+    return _mail(mail.create_collection, body.owner, body.kind, body.name, body.color, body.description)
+
+
+@app.post("/api/mail/dav/update")
+def api_mail_dav_update(body: DavBody, user: str = auth.CurrentUser):
+    return _mail(mail.update_collection, body.owner, body.id, body.name, body.color, body.description)
+
+
+@app.post("/api/mail/dav/delete")
+def api_mail_dav_delete(body: DavBody, user: str = auth.CurrentUser):
+    return _mail(mail.delete_collection, body.owner, body.id)
+
+
+@app.post("/api/mail/dav/share")
+def api_mail_dav_share(body: DavBody, user: str = auth.CurrentUser):
+    return _mail(mail.share_collection, body.owner, body.id, body.with_, body.write)
+
+
+@app.post("/api/mail/dav/unshare")
+def api_mail_dav_unshare(body: DavBody, user: str = auth.CurrentUser):
+    return _mail(mail.unshare_collection, body.owner, body.id, body.with_)
+
+
+@app.post("/api/mail/test")
+def api_mail_test(body: MailValueBody, user: str = auth.CurrentUser):
+    return _mail(mail.send_test, body.to, body.sender)
+
+
+# --------------------------------------------------------------------------- #
+# Requirements: software a page needs, with a one-click install
+# --------------------------------------------------------------------------- #
+class RequireBody(BaseModel):
+    id: str
+
+
+@app.get("/api/requires")
+def api_requires(ids: str = "", user: str = auth.CurrentUser):
+    return requires.status([i for i in ids.split(",") if i])
+
+
+@app.post("/api/requires/install")
+def api_requires_install(body: RequireBody, user: str = auth.CurrentUser):
+    try:
+        return {"job": requires.install(body.id).id}
+    except requires.RequiresError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 # --------------------------------------------------------------------------- #

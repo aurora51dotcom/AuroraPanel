@@ -47,6 +47,168 @@ def bind_installed() -> bool:
 
 
 # --------------------------------------------------------------------------- #
+# Server options: safe defaults + secondary DNS (zone transfers)
+# --------------------------------------------------------------------------- #
+OPTIONS = Path("/etc/bind/named.conf.options")
+SECONDARIES = Path("/var/lib/aurora/dns-secondaries.json")
+OPT_HEADER = "// Written by AuroraPanel (Zone Editor → Secondary DNS). Edit there — changes here are overwritten."
+# Recursive lookups only for this machine, its own networks (a Pi's LAN) and VPN clients — never an open resolver.
+_RECURSION = "localhost; localnets; 10.0.0.0/8; 100.64.0.0/10;"
+
+
+def _ips(host: str) -> list[str]:
+    try:
+        return sorted({a[4][0] for a in socket.getaddrinfo(host, None) if a[0] in (socket.AF_INET, socket.AF_INET6)})
+    except OSError:
+        return []
+
+
+def _my_ips() -> set[str]:
+    out = {"127.0.0.1", "::1"}
+    try:
+        import psutil
+        for addrs in psutil.net_if_addrs().values():
+            out.update(a.address.split("%")[0] for a in addrs if a.family in (socket.AF_INET, socket.AF_INET6))
+    except Exception:
+        pass
+    try:
+        from . import mail
+        ip = mail._public_ip()
+        if ip:
+            out.add(ip)
+    except Exception:
+        pass
+    return out
+
+
+def _sec_conf() -> dict:
+    try:
+        import json
+        c = json.loads(SECONDARIES.read_text())
+    except (OSError, ValueError):
+        c = {}
+    return {"auto": c.get("auto", True), "extra": [x for x in c.get("extra", []) if _valid_ip(x)]}
+
+
+def _valid_ip(x: str) -> bool:
+    try:
+        ipaddress.ip_address(str(x))
+        return True
+    except ValueError:
+        return False
+
+
+def detected_secondaries() -> dict[str, list[str]]:
+    """Nameservers named in our zones' NS records that aren't this server — the secondaries
+    that copy the zones (e.g. a hosting provider's ns1/ns2)."""
+    mine, out = _my_ips(), {}
+    if not ZONE_DIR.exists():
+        return out
+    for f in ZONE_DIR.glob("db.*"):
+        d = f.name[3:]
+        try:
+            z = parse(f.read_text(errors="replace"), d)
+        except Exception:
+            continue
+        for r in z["records"]:
+            if r["type"] != "NS":
+                continue
+            host = r["target"].rstrip(".")
+            if host in out:
+                continue
+            ips = [i for i in _ips(host) if i not in mine]
+            if ips:
+                out[host] = ips
+    return out
+
+
+def refused_transfers(days: int = 7) -> list[dict]:
+    """Recent zone-transfer requests BIND refused — usually a provider's secondary DNS
+    (its fetching address isn't always one of its nameservers, like ipserver's dnsmgr)."""
+    try:
+        r = subprocess.run(["journalctl", "-u", "named", "-u", "bind9", "--since", f"-{days}d", "-o", "cat", "--no-pager", "-q"],
+                           capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    seen: dict[str, dict] = {}
+    for line in r.stdout.splitlines():
+        m = re.search(r"client @\S+ ([0-9a-fA-F.:]+)#\d+.*zone transfer '([^/]+)/[A-Z]+/IN' denied", line)
+        if m and _valid_ip(m.group(1)):
+            seen.setdefault(m.group(1), {"ip": m.group(1), "zones": set()})["zones"].add(m.group(2))
+    allowed = set(allowed_transfer_ips()) | _my_ips()
+    return [{"ip": k, "zones": sorted(v["zones"])} for k, v in seen.items() if k not in allowed]
+
+
+def allowed_transfer_ips() -> list[str]:
+    c = _sec_conf()
+    ips = list(c["extra"])
+    if c["auto"]:
+        for v in detected_secondaries().values():
+            ips += v
+    return sorted(dict.fromkeys(ips))
+
+
+def render_options(ips: list[str]) -> str:
+    acl = "".join(f" {i};" for i in ips)
+    lines = [OPT_HEADER, "options {", '\tdirectory "/var/cache/bind";', "\tdnssec-validation auto;", "\tlisten-on-v6 { any; };",
+             f"\tallow-recursion {{ {_RECURSION} }};", f"\tallow-query-cache {{ {_RECURSION} }};",
+             f"\tallow-transfer {{ localhost;{acl} }};", "\tnotify yes;"]
+    if ips:
+        lines.append(f"\talso-notify {{{acl} }};")
+    lines += ['\tversion "not disclosed";', "};", ""]
+    return "\n".join(lines)
+
+
+def apply_options() -> dict:
+    """Write BIND's options (safe defaults + allowed secondaries) and reload if they changed."""
+    if not (bind_installed() and OPTIONS.parent.is_dir()):
+        return {"ok": False}
+    old = OPTIONS.read_text() if OPTIONS.exists() else None
+    if old is not None and not old.startswith(OPT_HEADER) and not SECONDARIES.exists():
+        # Taking over a hand-written file: keep whatever it already allowed to transfer.
+        m = re.search(r"allow-transfer\s*\{([^}]*)\}", old)
+        kept = [x.strip() for x in (m.group(1).split(";") if m else []) if _valid_ip(x.strip()) and x.strip() not in ("127.0.0.1", "::1")]
+        if kept:
+            import json
+            SECONDARIES.parent.mkdir(parents=True, exist_ok=True)
+            SECONDARIES.write_text(json.dumps({"auto": True, "extra": sorted(set(kept))}))
+    ips = allowed_transfer_ips()
+    text = render_options(ips)
+    if old == text:
+        return {"ok": True, "changed": False, "allowed": ips}
+    if old is not None and not old.startswith(OPT_HEADER):
+        dist = OPTIONS.with_name("named.conf.options.dist")
+        if not dist.exists():
+            dist.write_text(old)
+    OPTIONS.write_text(text)
+    chk = subprocess.run(["named-checkconf"], capture_output=True, text=True, timeout=30)
+    if chk.returncode != 0:
+        if old is not None:
+            OPTIONS.write_text(old)
+        raise ZoneError("BIND rejected the options, nothing changed:\n" + (chk.stderr or chk.stdout).strip()[-400:])
+    subprocess.run(["rndc", "reconfig"], capture_output=True, timeout=20)
+    for f in ZONE_DIR.glob("db.*") if ZONE_DIR.exists() else []:
+        subprocess.run(["rndc", "notify", f.name[3:]], capture_output=True, timeout=10)
+    return {"ok": True, "changed": True, "allowed": ips}
+
+
+def secondary_settings() -> dict:
+    c = _sec_conf()
+    return {**c, "detected": detected_secondaries(), "refused": refused_transfers(), "allowed": allowed_transfer_ips(),
+            "bind_installed": bind_installed()}
+
+
+def set_secondaries(auto: bool, extra: list[str]) -> dict:
+    import json
+    bad = [x for x in extra if not _valid_ip(str(x).strip())]
+    if bad:
+        raise ZoneError(f"Not an IP address: {', '.join(map(str, bad))}")
+    SECONDARIES.parent.mkdir(parents=True, exist_ok=True)
+    SECONDARIES.write_text(json.dumps({"auto": bool(auto), "extra": sorted({str(x).strip() for x in extra})}))
+    return {**apply_options(), **secondary_settings()}
+
+
+# --------------------------------------------------------------------------- #
 # Parsing
 # --------------------------------------------------------------------------- #
 def _strip_comment(line: str) -> str:
@@ -292,6 +454,11 @@ def _write(domain: str, z: dict) -> dict:
     ZONE_DIR.mkdir(parents=True, exist_ok=True)
     _path(domain).write_text(text, encoding="utf-8")
     served = _publish(domain)
+    if served:
+        try:
+            apply_options()  # NS records may name new secondaries
+        except ZoneError:
+            pass
     return {"ok": True, "serial": z["soa"]["serial"], "served": served}
 
 
