@@ -99,8 +99,33 @@ def lookup(ip: str) -> dict:
 
 
 def evidence(ip: str, days: int = 7) -> list[dict]:
+    """Failed logins (SSH, mail, panel, FTP) and web attacks the WAF caught, newest first."""
     from . import netmon
-    return [e for e in netmon.auth_events(days * 86400) if e.get("ip") == ip and e.get("outcome") != "ok"]
+    ev = [e for e in netmon.auth_events(days * 86400) if e.get("ip") == ip and e.get("outcome") != "ok"]
+    try:
+        from . import waf
+        for w in waf.events(hours=days * 24, limit=500, ip=ip):
+            r = waf._primary(w["rules"])
+            req = " ".join(w["request"].split(" ")[:2])[:160]
+            ev.append({"ts": w["ts"], "source": "web firewall", "kind": "attack",
+                       "detail": f"{r['category']} ({r['msg'][:80]}) — {req}" + (" — blocked" if w["blocked"] else "")})
+    except Exception:
+        pass
+    return sorted(ev, key=lambda e: -e["ts"])
+
+
+def _counts(ev: list[dict]) -> dict:
+    attacks = sum(1 for e in ev if e.get("kind") == "attack")
+    return {"logins": len(ev) - attacks, "attacks": attacks}
+
+
+def _what(c: dict) -> str:
+    parts = []
+    if c["logins"]:
+        parts.append(f"{c['logins']} unauthorized login attempt{'s' if c['logins'] != 1 else ''}")
+    if c["attacks"]:
+        parts.append(f"{c['attacks']} web attack{'s' if c['attacks'] != 1 else ''} (blocked by our web application firewall)")
+    return " and ".join(parts) or "abusive traffic"
 
 
 def _body(ip: str, info: dict, ev: list[dict], host: str, server_ip: str, note: str) -> str:
@@ -109,14 +134,17 @@ def _body(ip: str, info: dict, ev: list[dict], host: str, server_ip: str, note: 
     lines = [
         "Hello,",
         "",
-        f"The address {ip}{net}, which belongs to your network, has been making unauthorized login attempts against our server.",
+        f"The address {ip}{net}, which belongs to your network, has been sending {_what(_counts(ev))} to our server.",
         "",
         f"Our server: {host} ({server_ip})",
-        f"Attempts: {len(ev)} failed login(s) between {fmt(ev[-1]['ts'])} and {fmt(ev[0]['ts'])}." if ev else "Attempts: see below.",
+        f"Period: {fmt(ev[-1]['ts'])} to {fmt(ev[0]['ts'])}." if ev else "Details: see below.",
         "",
         "Log excerpt (UTC):",
     ]
     for e in ev[:60]:
+        if e.get("kind") == "attack":
+            lines.append(f"  {fmt(e['ts'])}  {e['source']}: {e['detail']} from {ip}")
+            continue
         who = f" as user '{e['user']}'" if e.get("user") else ""
         lines.append(f"  {fmt(e['ts'])}  {e['source']}: failed login{who} from {ip}")
     if len(ev) > 60:
@@ -137,7 +165,7 @@ def preview(ip: str) -> dict:
     # Abuse desks must be able to reply, so local-network (.local) addresses aren't offered.
     accounts = sorted(a for a in mail.load()["accounts"] if not mail.is_local(a.split("@")[1])) if mail.installed() else []
     rep = c["reported"].get(ip)
-    return {"ip": ip, "info": info, "events": len(ev), "from": c["from"] if c["from"] in accounts else "",
+    return {"ip": ip, "info": info, "events": len(ev), "counts": _counts(ev), "from": c["from"] if c["from"] in accounts else "",
             "accounts": accounts, "mail_ready": mail.installed() and mail.configured(), "reported": rep,
             "body": _body(ip, info, ev, mail.hostname(), mail._public_ip(), "")}
 
@@ -177,7 +205,7 @@ def report(ip: str, sender: str = "", to: str = "", note: str = "", force: bool 
         raise AbuseError(f"No abuse contact is published for {ip}")
     ev = evidence(ip)
     host = mail.hostname()
-    subject = f"Abuse report: {ip} — {len(ev) or 'repeated'} unauthorized login attempts against {host}"
+    subject = f"Abuse report: {ip} — {_what(_counts(ev))} against {host}"
     body = _body(ip, info, ev, host, mail._public_ip(), note)
     from email.message import EmailMessage
     from email.utils import formatdate

@@ -494,6 +494,7 @@ const API = (() => {
     metResources: (span) => request("GET", `/api/metrics/resources?span=${encodeURIComponent(span || "day")}`),
     metAnalytics: (site, days, file, name) => request("GET", `/api/metrics/analytics?site=${encodeURIComponent(site)}&days=${days || 30}${file ? "&file=" + encodeURIComponent(file) : ""}${name ? "&name=" + encodeURIComponent(name) : ""}`),
     metRaw: () => request("GET", "/api/metrics/raw"),
+    metIp: (ip, days) => request("GET", `/api/metrics/ip?ip=${encodeURIComponent(ip)}&days=${days || 7}`),
     metRetention: (days) => request("POST", "/api/metrics/retention", { days }),
   };
 })();

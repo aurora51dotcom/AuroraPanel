@@ -22,7 +22,7 @@ def test_rdap_abuse_contact_is_found_in_nested_entities():
 def test_report_body_lists_the_evidence():
     ev = [{"ts": 1792800000 + i, "source": "SSH", "user": "admin" if i % 2 else None} for i in range(3)][::-1]
     body = abuse._body("92.118.39.49", {"network": "DMZHOST"}, ev, "mail.example.com", "203.0.113.7", "")
-    assert "92.118.39.49 (DMZHOST)" in body and "3 failed login(s)" in body and "as user 'admin'" in body
+    assert "92.118.39.49 (DMZHOST)" in body and "3 unauthorized login attempts" in body and "as user 'admin'" in body
     assert "mail.example.com (203.0.113.7)" in body
 
 
@@ -39,3 +39,11 @@ def test_local_domains(monkeypatch):
     assert mail._effective_routing("ns1.local", {"routing": "auto"}) == "local"
     assert mail.ensure_dkim("ns1.local") is None
     assert "smtp_host_lookup" in mail.postfix_settings("h", "c", "k") and "pcre:" in mail.postfix_settings("h", "c", "k")["transport_maps"]
+
+
+def test_report_body_includes_web_attacks():
+    ev = [{"ts": 1792800100, "source": "web firewall", "kind": "attack", "detail": "SQL injection (libinjection) — GET /?id=1 — blocked"},
+          {"ts": 1792800000, "source": "SSH", "user": "root"}]
+    body = abuse._body("192.0.2.9", {}, ev, "mail.example.com", "203.0.113.7", "")
+    assert "1 unauthorized login attempt and 1 web attack" in body
+    assert "web firewall: SQL injection" in body and "failed login as user 'root'" in body

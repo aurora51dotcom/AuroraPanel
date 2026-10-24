@@ -96,7 +96,8 @@ def render_pre(s: dict) -> str:
 
 def render_post(s: dict) -> str:
     ids = sorted(s["disabled_rules"], key=lambda x: int(x))
-    body = "\n".join(f"    SecRuleRemoveById {i}   # {s['disabled_rules'][i].get('msg', '')[:80]}" for i in ids)
+    note = lambda i: re.sub(r"[^\x20-\x7e]", " ", str(s["disabled_rules"][i].get("msg", "")))[:80]
+    body = "\n".join(f"    SecRuleRemoveById {int(i)}   # {note(i)}" for i in ids)
     return HEADER + "<IfModule security2_module>\n" + (body + "\n" if body else "    # no rules switched off\n") + "</IfModule>\n"
 
 
@@ -220,7 +221,8 @@ def allow_rule(rule_id: str, msg: str = "") -> dict:
         raise WafError("Unknown rule")
     if str(rule_id) in _SUMMARY:
         raise WafError("That's the score summary, not a single rule — allow the rule that added the points")
-    s["disabled_rules"][str(rule_id)] = {"msg": (msg or "")[:200], "since": int(time.time())}
+    clean = re.sub(r"[^\x20-\x7e]", " ", msg or "")[:200]  # one printable line: it ends up in an Apache config comment
+    s["disabled_rules"][str(rule_id)] = {"msg": clean, "since": int(time.time())}
     return apply(s)
 
 

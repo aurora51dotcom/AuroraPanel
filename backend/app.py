@@ -1520,7 +1520,12 @@ def api_waf_update(body: WafBody, user: str = auth.CurrentUser):
 
 @app.get("/api/waf/events")
 def api_waf_events(hours: int = 24, ip: str = "", user: str = auth.CurrentUser):
-    return {"events": waf.events(hours=max(1, min(hours, 24 * 30)), limit=500, ip=ip)}
+    ev = waf.events(hours=max(1, min(hours, 24 * 30)), limit=500, ip=ip)
+    try:
+        st = guard.status_of(sorted({e["ip"] for e in ev}))
+    except Exception:
+        st = {}
+    return {"events": ev, "ip_status": st}
 
 
 @app.post("/api/waf/allow-rule")
@@ -3432,6 +3437,11 @@ def api_met_res(span: str = "day", user: str = auth.CurrentUser):
 @app.get("/api/metrics/analytics")
 def api_met_analytics(site: str, days: int = 30, file: str = "", name: str = "", user: str = auth.CurrentUser):
     return _met_call(lambda: metrics.analytics(site, days, file, name))
+
+
+@app.get("/api/metrics/ip")
+def api_met_ip(ip: str, days: int = 7, user: str = auth.CurrentUser):
+    return _met_call(lambda: metrics.ip_info(ip, max(1, min(days, 90))))
 
 
 @app.get("/api/metrics/raw")

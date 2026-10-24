@@ -3,7 +3,15 @@
    Loaded before app.js; app.js calls window.AuroraExtras(ui) once with its helpers. */
 window.AuroraExtras = (ui) => {
   "use strict";
-  const { el, icon, btn, pill, field, sw, toast, API, navigate, state, openModal, closeModal, copyText, fmtBytes, ago, downloadText } = ui;
+  const { icon, btn, pill, field, sw, toast, API, navigate, state, openModal, closeModal, copyText, fmtBytes, ago, downloadText } = ui;
+  // Text from logs (URLs, user agents, referrers, error messages) is attacker-controlled: always textContent,
+  // shown exactly as recorded; an "html" attribute is refused outright.
+  const el = (tag, attrs = {}, kids = []) => {
+    if ("html" in attrs) throw new Error("extras.js never renders HTML");
+    return ui.el(tag, { raw: true, ...attrs }, kids);
+  };
+  // Only real web links become clickable (a referrer can be "javascript:…" or anything else a bot sends).
+  const safeUrl = (u) => (/^https?:\/\/[^\s"'<>]+$/i.test(u || "") ? u : null);
 
   // ------------------------------------------------------------------ shared bits
   const NS = "http://www.w3.org/2000/svg";
@@ -125,6 +133,7 @@ window.AuroraExtras = (ui) => {
   }
   const PALETTE = ["#ff7a1a", "#6fb6ff", "#3fd08f", "#b38cff", "#ffb347", "#ff6b9a", "#4fd1c5", "#c4a484", "#9aa5b1", "#ffd84d"];
   function donut(items, fmt) {
+    if (!items.length || !items.some((x) => x.n)) return el("p", { class: "muted mx-none", text: "Nothing yet." });
     const total = items.reduce((a, x) => a + x.n, 0) || 1;
     const svg = S("svg", { viewBox: "0 0 42 42", class: "mx-donut" });
     svg.append(S("circle", { cx: 21, cy: 21, r: 15.915, fill: "none", stroke: "var(--stroke)", "stroke-width": 6 }));
@@ -167,6 +176,114 @@ window.AuroraExtras = (ui) => {
   }
   async function banIp(ip, reason) {
     return call(() => API.guardBan(ip, reason, 24 * 3600), `${ip} banned for 24 hours`);
+  }
+
+  // ---------------------------------------------------------------- one IP, in the panel
+  const FLAG = (cc) => (cc && /^[A-Z]{2}$/.test(cc) ? String.fromCodePoint(...[...cc].map((c) => 0x1f1a5 + c.charCodeAt(0))) : "");
+  const DURATIONS = [[3600, "1 hour"], [86400, "24 hours"], [7 * 86400, "7 days"], [30 * 86400, "30 days"], [0, "Forever"]];
+  async function ipCard(ip, onChange) {
+    const body = el("div", { class: "mx-ipcard" }, el("div", { class: "loading", text: `Looking up ${ip}…` }));
+    const foot = el("div", { class: "mx-ipfoot" });
+    openModal(`IP address ${ip}`, el("div", {}, [body]), [foot]);
+    const m = document.querySelector("#modal .modal"); if (m) m.classList.add("em-modal");
+    let days = 7;
+    async function load() {
+      let d;
+      try { d = await API.metIp(ip, days); } catch (e) { body.innerHTML = ""; body.append(el("p", { class: "empty", text: e.message })); return; }
+      const st = d.state || {}, o = d.owner || {}, w = d.web;
+      body.innerHTML = "";
+      const stPill = st.status === "banned" ? pill(st.kind === "fail2ban" ? `banned by fail2ban (${(st.jails || []).join(", ") || "jail"})` : "banned", "bad")
+        : st.status === "trusted" ? pill("trusted", "good") : pill("not banned");
+      const banLine = st.status === "banned" ? (st.kind === "manual"
+        ? `Banned ${st.created ? ago(st.created) : ""}${st.cidr && st.cidr !== ip && st.cidr !== ip + "/32" ? ` as part of ${st.cidr}` : ""}${st.reason ? ` — “${st.reason}”` : ""}. ${st.expires ? `Lifts ${new Date(st.expires * 1000).toLocaleString()}.` : "Until you unban it."}`
+        : `fail2ban banned it automatically${st.expires_in ? `, lifts in ${dur(st.expires_in)}` : ""}.`) + " It can't reach anything on this server: websites, mail, SSH, FTP, VPN and this panel."
+        : st.status === "trusted" ? `Trusted${st.cidr && st.cidr !== ip && st.cidr !== ip + "/32" ? ` (via ${st.cidr})` : ""}${st.reason ? ` — “${st.reason}”` : ""}: it is never banned.` : "";
+      body.append(el("div", { class: "mx-ip-head" }, [
+        el("div", { class: "mx-ip-flag", text: FLAG(o.country) || "🌐" }),
+        el("div", { class: "mx-ip-id" }, [el("div", { class: "mx-ip-addr" }, [el("code", { text: ip }), stPill]),
+          el("div", { class: "muted", text: [o.network, o.country, d.ptr].filter(Boolean).join(" · ") || (d.private ? "A private / local network address" : "No owner information") })]),
+        seg([[1, "24 h"], [7, "7 days"], [30, "30 days"]], days, (v) => { days = v; load(); }),
+      ]));
+      if (banLine) body.append(el("div", { class: `mx-note ${st.status === "trusted" ? "mx-note-ok" : ""}` }, [icon(st.status === "trusted" ? "check" : "ban", 16), el("span", { text: banLine })]));
+      body.append(el("div", { class: "mx-tiles mx-tiles-6" }, [
+        tile("Requests", num(w.hits), w.last ? `last ${ago(w.last)}` : "none in this period", "processes"),
+        tile("Pages", num(w.pages), "real pages, not images/CSS", "listing"),
+        tile("Data sent", fmtBytes(w.bytes), "", "network"),
+        tile("WAF", num(d.waf.events), d.waf.events ? `${num(d.waf.blocked)} blocked` : "no attacks seen", "shield", d.waf.events ? "warnt" : ""),
+        tile("Failed logins", num(d.logins_failed), "SSH, mail, panel, FTP", "key", d.logins_failed ? "warnt" : ""),
+      ]));
+      const kvRow = (k, v) => (v ? el("div", { class: "mx-kv" }, [el("span", { text: k }), typeof v === "string" ? el("span", { text: v }) : v]) : null);
+      body.append(el("div", { class: "mx-grid2" }, [
+        card("Who owns it", [
+          o.error ? el("p", { class: "muted", text: o.error }) : null,
+          kvRow("Network", o.network), kvRow("Country", o.country ? `${FLAG(o.country)} ${o.country}` : ""), kvRow("Range", o.range), kvRow("Reverse DNS", d.ptr),
+          o.contacts && o.contacts.length ? kvRow(o.abuse_role ? "Abuse contact" : "Contact", el("span", {}, o.contacts.map((c) => el("code", { class: "mx-chipc", text: c })))) : null,
+          d.private ? el("p", { class: "muted", text: "A private address: a device on your own network, a VPN client, or this server itself." }) : null,
+          el("div", { class: "toolbar" }, [el("a", { class: "btn btn-sm btn-ghost", href: `https://rdap.org/ip/${encodeURIComponent(ip)}`, target: "_blank", rel: "noopener noreferrer", text: "Full registry record ↗" })]),
+        ]),
+        card("What it did", [
+          w.sites.length ? el("div", { class: "mx-sub" }, "Websites") : null, w.sites.length ? rank(w.sites.map(([s, n]) => ({ label: s, n })), { limit: 5 }) : null,
+          d.waf.types.length ? el("div", { class: "mx-sub" }, "Attacks the WAF saw") : null, d.waf.types.length ? rank(d.waf.types.map(([s, n]) => ({ label: s, n })), { limit: 5 }) : null,
+          w.agents.length ? el("div", { class: "mx-sub" }, "Identifies as") : null,
+          ...w.agents.map((a) => el("div", { class: "mx-list-row" }, [el("span", { class: a.bot ? "mx-bot" : "", text: a.bot ? `🤖 ${a.browser}` : `${a.browser} · ${a.os}` }),
+            el("span", { class: "muted mx-ell grow", title: a.ua, text: a.ua || "(empty)" }), el("b", { text: num(a.n) })])),
+          !w.hits && !d.waf.events ? el("p", { class: "muted", text: "No requests to your websites in this period." }) : null,
+        ]),
+      ]));
+      if (w.recent.length) body.append(card("Latest requests", [el("div", { class: "table-wrap mx-table-wrap", style: "max-height:320px" }, el("table", { class: "mx-table" }, [
+        el("thead", {}, el("tr", {}, ["Time", "Site", "Request", "Status", "Size"].map((h, i) => el("th", { class: i >= 3 ? "num" : "", text: h })))),
+        el("tbody", {}, w.recent.map((r) => el("tr", {}, [el("td", { class: "mx-time", text: t2s(r.ts) }), el("td", { class: "mx-ell", text: r.site }),
+          el("td", {}, [el("span", { class: "muted", text: r.method + " " }), el("span", { class: "mx-url", title: r.url, text: r.url })]),
+          el("td", { class: "num" }, el("span", { class: `mx-st ${statusKind(r.status)}`, text: r.status })), el("td", { class: "num", text: fmtBytes(r.size) })])))]))]));
+      // actions
+      foot.innerHTML = "";
+      const act = async (fn, ok) => { if (await call(fn, ok)) { await load(); if (onChange) onChange(); } };
+      if (st.status === "banned") foot.append(btn("Unban", () => act(() => API.guardUnban(st.kind === "manual" && st.cidr ? st.cidr : ip), `${ip} unbanned`), "btn-primary"));
+      else if (st.status !== "trusted") {
+        const dsel = el("select", { class: "em-select mx-narrow" }, DURATIONS.map(([v, l]) => el("option", { value: v, text: l })));
+        dsel.value = "86400";
+        foot.append(el("div", { class: "mx-ban" }, [dsel, btn("Ban", () => act(() => API.guardBan(ip, `Panel: ${w.hits} requests, ${d.waf.events} WAF events, ${d.logins_failed} failed logins`, +dsel.value || null), `${ip} banned`), "btn-danger")]));
+      }
+      if (st.status === "trusted") foot.append(btn("Remove from trusted", () => act(() => API.guardUntrust(st.cidr || ip), `${ip} no longer trusted`), "btn-ghost"));
+      else if (st.status !== "banned") foot.append(btn("Trust", () => act(() => API.guardTrust(ip, "Trusted from the IP card"), `${ip} trusted — it will never be banned`), "btn-ghost"));
+      if (!d.private) foot.append(btn(d.reported ? "Reported · read / send again" : "Report abuse", () => reportIp(ip, () => load()), d.reported ? "btn-ghost" : "btn-ghost"));
+      foot.append(btn("Copy IP", async () => toast(await copyText(ip) ? "Copied" : "Copy failed", "good"), "btn-ghost"));
+    }
+    load();
+  }
+  // Send an abuse report to the network that owns ip — from this server's own mail, with the evidence attached.
+  async function reportIp(ip, done) {
+    let p;
+    try { p = await API.abusePreview(ip); } catch (e) { toast(e.message, "bad"); return; }
+    if (!p.mail_ready) { toast("Reports go out through this server's mail — set up Email first", "bad"); return; }
+    if (!p.info.contacts.length) { toast(`No abuse contact is published for ${ip}`, "bad"); return; }
+    const from = el("select", { class: "em-select" }, p.accounts.map((a) => el("option", { value: a, text: a })));
+    if (p.from) from.value = p.from;
+    const to = el("select", { class: "em-select" }, p.info.contacts.map((a) => el("option", { value: a, text: a })));
+    const note = el("textarea", { rows: 2, placeholder: "Optional note added to the report" });
+    const preview = el("pre", { class: "mx-pre", style: "max-height:280px", text: p.body });
+    const c = p.counts || { logins: p.events, attacks: 0 };
+    const send = el("button", { class: "btn btn-primary", text: p.reported ? "Send again" : "Send report", onclick: async () => {
+      send.disabled = true;
+      try {
+        const r = await API.abuseReport({ ip, sender: from.value, to: to.value, note: note.value.trim(), force: !!p.reported });
+        toast(`Reported ${ip} to ${r.to.join(", ")}`, "good"); closeModal(); if (done) setTimeout(() => ipCard(ip), 150);
+      } catch (err) { toast(err.message, "bad"); send.disabled = false; }
+    } });
+    openModal(`Report ${ip}`, el("div", { class: "em-form" }, [
+      el("div", { class: "mx-tiles" }, [
+        tile("Failed logins", num(c.logins), "SSH, mail, panel, FTP · 7 days", "key", c.logins ? "warnt" : ""),
+        tile("Web attacks", num(c.attacks), "caught by the WAF · 7 days", "shield", c.attacks ? "warnt" : ""),
+        tile("Network", p.info.network || "—", p.info.country || "", "globe"),
+      ]),
+      !p.events ? el("div", { class: "mx-note" }, [icon("warning", 16), el("span", { text: "No failed logins or WAF attacks from this address in the last 7 days — abuse desks usually ignore reports without evidence." })]) : null,
+      p.reported ? el("div", { class: "mx-note" }, [icon("check", 16), el("span", { text: `Already reported to ${p.reported.to.join(", ")} on ${new Date(p.reported.ts * 1000).toLocaleString()} from ${p.reported.from}. Sending again repeats it.` })]) : null,
+      p.accounts.length ? el("div", { class: "mx-grid2" }, [field("Send from", from, "Remembered for next time; replies come here."), field("To (abuse contact)", to, "Published by the network's registry.")])
+        : el("p", { class: "empty", text: "Create an email account first (Email → Email Accounts)." }),
+      field("Note", note),
+      el("div", { class: "mx-sub" }, "The message"), preview,
+    ].filter(Boolean)), p.accounts.length ? [send] : []);
+    const m = document.querySelector("#modal .modal"); if (m) m.classList.add("em-modal");
   }
 
   // ======================================================================
@@ -262,9 +379,9 @@ window.AuroraExtras = (ui) => {
         seg([[1, "1 h"], [24, "24 h"], [168, "7 days"], [720, "30 days"]], hours, (v) => { hours = v; loadEvents(); })]), evBox], "", [btn("Refresh", () => loadEvents(), "btn-ghost")]));
       loadEvents();
     }
-    let evBox, events = [];
+    let evBox, events = [], ipst = {};
     async function loadEvents() {
-      try { events = (await API.wafEvents(hours)).events; } catch (e) { evBox.innerHTML = ""; evBox.append(el("p", { class: "empty", text: e.message })); return; }
+      try { const r = await API.wafEvents(hours); events = r.events; ipst = r.ip_status || {}; } catch (e) { evBox.innerHTML = ""; evBox.append(el("p", { class: "empty", text: e.message })); return; }
       drawEvents();
     }
     function drawEvents() {
@@ -290,10 +407,11 @@ window.AuroraExtras = (ui) => {
             pill(e.blocked ? "Blocked" : "Logged", e.blocked ? "bad" : "warn"),
             el("div", { class: "mx-ev-what" }, [el("b", { text: r0.category }), el("span", { class: "muted mx-ell", text: r0.msg })]),
             el("div", { class: "mx-ev-req mx-ell", title: e.request }, [el("span", { class: "muted", text: e.host || "" }), " ", el("code", { text: e.request.replace(/ HTTP\/[\d.]+$/, "") })]),
-            el("span", { class: "mx-ev-ip", text: e.ip }),
+            el("span", { class: "mx-ev-ipw" }, [el("span", { class: "mx-ev-ip mx-ip", role: "link", text: e.ip, title: "Who is this?", onclick: (ev) => { ev.stopPropagation(); ipCard(e.ip, load); } }),
+              ipst[e.ip] ? el("span", { class: `mx-ipdot ${ipst[e.ip]}`, title: ipst[e.ip] === "banned" ? "Banned from the whole server" : "Trusted" }) : null]),
             el("span", { class: "muted mx-ev-t", text: ago(e.ts) }),
           ]),
-          el("div", { class: "mx-ev-act" }, [btn("Ban IP", () => banIp(e.ip, `WAF: ${r0.category}`), "btn-ghost")]),
+          el("div", { class: "mx-ev-act" }, [btn("IP…", () => ipCard(e.ip, load), "btn-ghost")]),
           more,
         ]);
       })));
@@ -319,7 +437,7 @@ window.AuroraExtras = (ui) => {
         row("URL", u.url), row("Via the panel", u.panel),
         u.url.startsWith("http:") ? el("p", { class: "muted mx-small", text: "No trusted HTTPS certificate covers this domain yet, so the URL uses plain HTTP. Get a free certificate in SSL/TLS to switch it to HTTPS." }) : null,
         el("p", { class: "muted mx-small", text: "Answers: “good <ip>” (changed), “nochg <ip>” (already right), “badauth” (wrong key), “abuse” (too often — wait 30 s)." })],
-      "Linux / Pi (cron)": () => [el("p", { class: "muted", text: "Runs every 5 minutes on the machine at home and keeps the name pointed at it:" }),
+      "Linux (cron)": () => [el("p", { class: "muted", text: "Runs every 5 minutes on the machine at home and keeps the name pointed at it:" }),
         row("crontab -e", `*/5 * * * * curl -fsS "${u.url}" >/dev/null`), row("IPv6 too", `*/5 * * * * curl -6 -fsS "${u.url}" >/dev/null`)],
       "Router (DynDNS)": () => [el("p", { class: "muted", text: "Most routers (FRITZ!Box, OpenWrt, pfSense, OPNsense, MikroTik, Ubiquiti…) have a “Custom” or “DynDNS2” Dynamic DNS option:" }),
         row("Server / URL", `${u.nic.replace(/^https?:\/\//, "").split("/")[0]}/nic/update?hostname=<domain>&myip=<ipaddr>`), row("Hostname", h.host), row("Username", h.host), row("Password", key),
@@ -339,7 +457,7 @@ window.AuroraExtras = (ui) => {
     const body = el("div", {}, el("div", { class: "loading", text: "Loading…" }));
     const createBtn = el("button", { class: "btn btn-primary", onclick: () => create() }, [icon("plus", 15), " Create"]);
     root.append(pageHead("Dynamic DNS", "Give a device on a network with a changing IP — your home, an office, a Raspberry Pi behind a router — a fixed name like home.example.com, served by this server's DNS. A secret URL moves the name whenever the IP changes.",
-      [btn("Updater on this Pi (DuckDNS…)", () => navigate("dyndns"), "btn-ghost"), createBtn]), body);
+      [btn("Updater on this machine (DuckDNS…)", () => navigate("dyndns"), "btn-ghost"), createBtn]), body);
     let d, q = "";
     async function load() {
       try { d = await API.ddnsHosts(); } catch (e) { body.innerHTML = ""; body.append(el("p", { class: "empty", text: e.message })); return; }
@@ -514,12 +632,15 @@ window.AuroraExtras = (ui) => {
     }
     function cell(c, r) {
       switch (c) {
-        case "ip": return el("button", { type: "button", class: "mx-ip", text: r.ip, title: "Show only this visitor", onclick: () => setIp(r.ip) });
+        case "ip": return el("span", { class: "mx-ev-ipw" }, [el("button", { type: "button", class: "mx-ip", text: r.ip, title: "Show only this visitor", onclick: () => setIp(r.ip) }),
+          d.ip_status[r.ip] ? el("span", { class: `mx-ipdot ${d.ip_status[r.ip]}`, title: d.ip_status[r.ip] === "banned" ? "Banned from the whole server" : "Trusted" }) : null]);
         case "url": return el("span", { class: "mx-url", title: r.url, text: r.url });
         case "ts": return el("span", { class: "mx-time", text: t2s(r.ts, { month: "numeric", day: "numeric", year: "2-digit", hour: "numeric", minute: "2-digit", second: "2-digit" }) });
         case "size": return document.createTextNode(fmtBytes(r.size));
         case "status": return el("span", { class: `mx-st ${statusKind(r.status)}`, text: r.status });
-        case "ref": return r.ref ? el("a", { href: r.ref, target: "_blank", rel: "noopener noreferrer nofollow", class: "mx-url", title: r.ref, text: r.ref.replace(/^https?:\/\//, "") }) : el("span", { class: "muted", text: "—" });
+        case "ref": return !r.ref ? el("span", { class: "muted", text: "—" })
+          : safeUrl(r.ref) ? el("a", { href: safeUrl(r.ref), target: "_blank", rel: "noopener noreferrer nofollow", referrerpolicy: "no-referrer", class: "mx-url", title: r.ref, text: r.ref.replace(/^https?:\/\//, "") })
+          : el("span", { class: "mx-url mx-bad-url", title: r.ref, text: r.ref });
         case "ua": return el("span", { class: "mx-ua", title: r.ua, text: r.ua || "—" });
         case "client": return el("span", { class: r.bot ? "mx-bot" : "", text: r.client });
         default: return document.createTextNode(r[c] || "");
@@ -536,8 +657,7 @@ window.AuroraExtras = (ui) => {
         const st = d.ip_status[ipF];
         ipBar.append(el("div", { class: "mx-ipbar" }, [icon("users", 16), el("span", {}, ["Only ", el("b", { text: ipF }), ` · ${num(rows.length)} requests`]), st ? pill(st, st === "trusted" ? "good" : "bad") : null,
           el("span", { class: "grow" }),
-          el("a", { class: "btn btn-sm btn-ghost", href: `https://rdap.org/ip/${encodeURIComponent(ipF)}`, target: "_blank", rel: "noopener noreferrer", text: "Who owns it ↗" }),
-          st === "banned" ? null : btn("Ban 24 h", () => banIp(ipF, "Visitors page").then(load), "btn-ghost"),
+          btn("Who is this? · Ban · Trust", () => ipCard(ipF, load), "btn-primary"),
           btn("Show everyone", () => setIp(""), "btn-ghost")]));
       }
       const shown = VCOLS.filter((c) => cols.has(c.k));
@@ -559,7 +679,7 @@ window.AuroraExtras = (ui) => {
         el("span", { class: "grow" }),
         seg([[25, "25"], [100, "100"], [250, "250"], [0, "All"]], per, (v) => { per = v; LS.set("vis.per", v); page = 0; drawTable(); }),
         btn("Export CSV", () => {
-          const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+          const esc = (v) => { let s = String(v ?? ""); if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; return `"${s.replace(/"/g, '""')}"`; };
           const keys = ["ts", "ip", "method", "url", "proto", "status", "size", "ref", "ua", "browser", "os", "device", "bot", "vhost"];
           downloadText(`${sid}-visitors.csv`, [keys.join(","), ...rows.map((r) => keys.map((k) => esc(k === "ts" ? new Date(r.ts * 1000).toISOString() : r[k])).join(","))].join("\n"), "text/csv");
         }, "btn-ghost"));
@@ -645,7 +765,7 @@ window.AuroraExtras = (ui) => {
             el("pre", { class: "mx-pre", text: g.example.msg }),
             g.example.referer ? el("div", { class: "mx-kv" }, [el("span", { text: "Referer" }), el("code", { text: g.example.referer })]) : null,
             g.clients.length ? el("div", { class: "mx-err-clients" }, [el("span", { class: "muted", text: "From: " }), ...g.clients.map(([ip, n]) => el("span", { class: "mx-client" }, [el("code", { text: ip }), el("span", { class: "muted", text: `×${n}` }),
-              btn("Ban", () => banIp(ip, `Errors: ${d.categories[g.cat].label}`), "btn-ghost")]))]) : null,
+              btn("Who? · Ban", () => ipCard(ip), "btn-ghost")]))]) : null,
             el("div", { class: "muted mx-small", text: `First ${t2s(g.first)} · last ${t2s(g.last)} · ${g.mod || g.example.source}${g.example.code ? " · " + g.example.code : ""} · ${g.example.file}` }),
           ]);
           return el("div", { class: `mx-err lv-${g.level.slice(0, 4)}` }, [
@@ -872,10 +992,10 @@ window.AuroraExtras = (ui) => {
         card("Exit pages", [rank(a.exit.map((p) => ({ label: p.url, n: p.n })))]),
         card("Visit duration", [rank(a.durations.filter((x) => x.visits).map((x) => ({ label: x.label, n: x.visits })), { limit: 7 })]),
       ]));
-      body.append(card("Visitors (hosts)", [sortableTable([{ k: "ip", label: "IP address", render: (r) => el("button", { type: "button", class: "mx-ip", text: r.ip, onclick: () => navigate("visitors", { arg: sid }) }) },
+      body.append(card("Visitors (hosts)", [sortableTable([{ k: "ip", label: "IP address", render: (r) => el("button", { type: "button", class: "mx-ip", text: r.ip, title: "Who is this?", onclick: () => ipCard(r.ip) }) },
         { k: "pages", label: "Pages", num: true, render: (r) => num(r.pages) }, { k: "hits", label: "Hits", num: true, render: (r) => num(r.hits) },
         { k: "bytes", label: "Bandwidth", num: true, render: (r) => fmtBytes(r.bytes) }, { k: "last", label: "Last visit", num: true, render: (r) => ago(r.last) },
-        { k: "_", label: "", render: (r) => el("a", { class: "btn btn-sm btn-ghost", href: `https://rdap.org/ip/${encodeURIComponent(r.ip)}`, target: "_blank", rel: "noopener noreferrer", text: "Who ↗" }) }], a.hosts, { sort: "pages", limit: 50 })]));
+        { k: "_", label: "", render: (r) => btn("Who?", () => ipCard(r.ip), "btn-ghost") }], a.hosts, { sort: "pages", limit: 50 })]));
       body.append(el("div", { class: "mx-grid2" }, [
         card("Robots & tools", [sortableTable([{ k: "name", label: "Name" }, { k: "hits", label: "Hits", num: true, render: (r) => num(r.hits) },
           { k: "bytes", label: "Bandwidth", num: true, render: (r) => fmtBytes(r.bytes) }, { k: "last", label: "Last visit", num: true, render: (r) => ago(r.last) }], a.robots, { sort: "hits", limit: 30 })]),

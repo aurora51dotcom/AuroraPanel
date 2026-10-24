@@ -9,17 +9,20 @@
     : s.replace(/(?<!Raspberry )\bPi's\b/g, "server's").replace(/(?<!Raspberry |\w\.)\bPi\b(?![-.]\w)/g, "server"));
   const el = (tag, attrs = {}, children = []) => {
     const node = document.createElement(tag);
+    // raw: data shown exactly as it is (log lines, URLs, user agents) — never reworded, never parsed as HTML.
+    const h = attrs.raw ? (s) => s : host;
     for (const [k, v] of Object.entries(attrs)) {
+      if (k === "raw") continue;
       if (k === "class") node.className = v;
-      else if (k === "html") node.innerHTML = host(v);
-      else if (k === "text") node.textContent = host(v);
-      else if ((k === "placeholder" || k === "title") && typeof v === "string") node.setAttribute(k, host(v));
-      else if (k.startsWith("on") && typeof v === "function") node.addEventListener(k.slice(2), v);
+      else if (k === "html") node.innerHTML = h(v);
+      else if (k === "text") node.textContent = h(v);
+      else if ((k === "placeholder" || k === "title") && typeof v === "string") node.setAttribute(k, h(v));
+      else if (k.startsWith("on")) { if (typeof v === "function") node.addEventListener(k.slice(2), v); }  // never inline handlers
       else if (v !== null && v !== undefined) node.setAttribute(k, v);
     }
     for (const c of [].concat(children)) {
       if (c == null) continue;
-      node.appendChild(typeof c === "string" ? document.createTextNode(host(c)) : c);
+      node.appendChild(typeof c === "string" ? document.createTextNode(h(c)) : c);
     }
     return node;
   };
@@ -61,6 +64,50 @@
   //  SVG line icons (Lucide-style)
   // ======================================================================
   const ICONS = {
+    t_dbweb: '<ellipse cx="9" cy="5.5" rx="6" ry="2.5"/><path d="M3 5.5v10c0 1.4 2.7 2.5 6 2.5"/><path d="M15 5.5V10"/><path d="M3 10.5c0 1.4 2.7 2.5 6 2.5"/><path d="m14 13 7.5 2.8-3.2 1.2-1.2 3.3z"/>',
+    t_dbnew: '<ellipse cx="10" cy="5.5" rx="6.5" ry="2.5"/><path d="M3.5 5.5v11c0 1.4 2.9 2.5 6.5 2.5"/><path d="M16.5 5.5v5"/><path d="M3.5 11c0 1.4 2.9 2.5 6.5 2.5"/><path d="M18.5 14v7M15 17.5h7"/>',
+    t_table: '<rect x="3" y="4" width="18" height="16" rx="2.5"/><path d="M3 9.5h18M3 14.8h18M9.5 9.5V20"/>',
+    t_tablenew: '<rect x="2.5" y="3.5" width="14" height="14" rx="2.2"/><path d="M2.5 8.5h14M2.5 13h14M7.5 8.5v9"/><path d="M19.5 15v7M16 18.5h7"/>',
+    t_tableweb: '<rect x="2.5" y="3.5" width="16" height="13" rx="2.2"/><path d="M2.5 8.5h16M8 8.5v8"/><path d="m13.5 13 8 3-3.4 1.3-1.3 3.4z"/>',
+    t_ddns: '<path d="M12 21.5s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11z"/><path d="M9.3 10.6a2.8 2.8 0 0 1 5-1.7"/><polyline points="14.6 6.9 14.6 9 12.5 9"/><path d="M14.7 11a2.8 2.8 0 0 1-5 1.7"/><polyline points="9.4 14.7 9.4 12.6 11.5 12.6"/>',
+    t_mailuser: '<rect x="2" y="4.5" width="14.5" height="11" rx="2"/><path d="m2.5 6.5 6.75 5 6.75-5"/><circle cx="18.5" cy="15" r="2.6"/><path d="M14 21.5a4.5 4.5 0 0 1 9 0"/>',
+    t_megaphone: '<path d="M3 10v4.5h3.2L13 19.5v-15L6.2 10z"/><path d="M17 9.2a4 4 0 0 1 0 6.1"/><path d="M19.6 6.6a7.6 7.6 0 0 1 0 11.3"/>',
+    t_mailtrack: '<rect x="2" y="4" width="14.5" height="10.5" rx="2"/><path d="m2.5 6 6.75 4.8L16 6"/><circle cx="17.5" cy="17.5" r="3.2"/><path d="m22 22-2.2-2.2"/>',
+    t_filterglobal: '<path d="M2 4h14l-5.5 6.4v5.3l-3 1.6v-6.9z"/><circle cx="18" cy="17" r="4.5"/><path d="M13.5 17h9M18 12.5a6.8 6.8 0 0 1 0 9"/>',
+    t_contactin: '<rect x="2.5" y="3.5" width="13" height="17" rx="2.2"/><circle cx="9" cy="10" r="2.6"/><path d="M5.3 16.5a3.8 3.8 0 0 1 7.4 0"/><path d="M22 12h-5.5"/><polyline points="19 9 16 12 19 15"/>',
+    t_mailspam: '<rect x="2.5" y="5" width="15" height="11.5" rx="2"/><path d="m3 7 7 5 7-5"/><circle cx="18" cy="17.5" r="4"/><path d="m15.2 20.3 5.6-5.6"/>',
+    t_maillock: '<rect x="2" y="4.5" width="15" height="11" rx="2"/><path d="m2.5 6.5 7 5 7-5"/><rect x="14.5" y="15" width="7.5" height="6" rx="1.3"/><path d="M16.2 15v-1.4a2 2 0 0 1 4 0V15"/>',
+    t_pie: '<path d="M20.5 13.5A8.6 8.6 0 1 1 10.5 3.6v9.9z"/><path d="M14 2.6a8.6 8.6 0 0 1 7.4 7.4H14z"/>',
+    t_vpnglobe: '<circle cx="10" cy="10" r="7.5"/><path d="M2.5 10h15M10 2.5a11 11 0 0 1 0 15M10 2.5a11 11 0 0 0 0 15"/><rect x="14.5" y="15" width="7.5" height="6" rx="1.3"/><path d="M16.2 15v-1.4a2 2 0 0 1 4 0V15"/>',
+    t_bolt: '<circle cx="12" cy="12" r="9.5"/><path d="M13.2 5.8 8.4 13.2h3.8l-1.4 5 4.8-7.4h-3.8z"/>',
+    t_keyhole: '<circle cx="12" cy="12" r="9.5"/><circle cx="12" cy="9.8" r="2.6"/><path d="M10.9 12.2 9.9 17h4.2l-1-4.8"/>',
+    t_laptoplock: '<rect x="4" y="4" width="16" height="11" rx="1.6"/><path d="M2 19h20"/><rect x="9.6" y="8.6" width="4.8" height="3.8" rx=".7"/><path d="M10.6 8.6v-.9a1.4 1.4 0 0 1 2.8 0v.9"/>',
+    t_router: '<rect x="2" y="13" width="20" height="7.5" rx="2.2"/><path d="M6 16.8h.01M9.5 16.8h.01"/><path d="M15 16.8h3"/><path d="M14 9.5a4 4 0 0 1 6 0"/><path d="M11.5 6.8a7.6 7.6 0 0 1 11 0"/>',
+    t_browserlock: '<rect x="2" y="3" width="20" height="18" rx="2.5"/><path d="M2 8h20M5.5 5.5h.01M8.5 5.5h.01"/><rect x="9" y="13" width="6" height="5" rx="1"/><path d="M10.3 13v-1.2a1.7 1.7 0 0 1 3.4 0V13"/>',
+    t_cert: '<rect x="2.5" y="3" width="19" height="13" rx="2.2"/><path d="M6.5 7.5h11M6.5 11h6"/><circle cx="16.5" cy="15.5" r="3"/><path d="m15 18.2-1 3.8 2.5-1.3L19 22l-1-3.8"/>',
+    t_apikey: '<path d="M8 4H6.5A2.5 2.5 0 0 0 4 6.5V10l-2 2 2 2v3.5A2.5 2.5 0 0 0 6.5 20H8"/><path d="M16 4h1.5A2.5 2.5 0 0 1 20 6.5V10l2 2-2 2v3.5a2.5 2.5 0 0 1-2.5 2.5H16"/><circle cx="12" cy="9.5" r="2.2"/><path d="M12 11.7V17M12 14.8h1.8"/>',
+    t_linkoff: '<path d="M9 15l2-2M13 11l2-2"/><path d="M11 6.2l.6-.6a4.2 4.2 0 0 1 6 6l-.6.6"/><path d="M13 17.8l-.6.6a4.2 4.2 0 0 1-6-6l.6-.6"/><path d="M3 3l18 18"/>',
+    t_waf: '<path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M4.4 9h15.2M4.9 13.4h14.2M9 5.5V9M15 5.5V9M12 9v4.4M8.6 13.4v4.2M15.4 13.4v4.2"/>',
+    t_phonecheck: '<rect x="6" y="2" width="12" height="20" rx="2.6"/><path d="M10.5 18.5h3"/><path d="m9.2 10.2 2 2 3.8-3.9"/>',
+    t_folderwrench: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v2.5"/><path d="M3 7v10a2 2 0 0 0 2 2h7"/><path d="M20 14.6a2.6 2.6 0 0 0-3.5 3.3l-2.8 2.8 1.2 1.2 2.8-2.8a2.6 2.6 0 0 0 3.3-3.5l-1.5 1.5-1-1z"/>',
+    t_folderlock: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v2.5"/><path d="M3 7v10a2 2 0 0 0 2 2h8.5"/><rect x="14.5" y="15" width="7.5" height="6" rx="1.3"/><path d="M16.2 15v-1.4a2 2 0 0 1 4 0V15"/>',
+    t_cloud: '<path d="M7 18.5a4.6 4.6 0 0 1-.7-9.1A6.2 6.2 0 0 1 18.2 8.3 4.1 4.1 0 0 1 18 16.5"/><path d="M12 11.5v9"/><polyline points="9 17.5 12 20.5 15 17.5"/>',
+    t_transfer: '<path d="M7.5 3v15"/><polyline points="4 14.5 7.5 18 11 14.5"/><path d="M16.5 21V6"/><polyline points="13 9.5 16.5 6 20 9.5"/>',
+    t_restore: '<path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1"/><polyline points="3 3.5 3 8.5 8 8.5"/><path d="M12 7.5V12l3.2 2"/>',
+    t_grid: '<rect x="3" y="3" width="5" height="5" rx="1.2"/><rect x="9.5" y="3" width="5" height="5" rx="1.2"/><rect x="16" y="3" width="5" height="5" rx="1.2"/><rect x="3" y="9.5" width="5" height="5" rx="1.2"/><rect x="9.5" y="9.5" width="5" height="5" rx="1.2"/><rect x="3" y="16" width="5" height="5" rx="1.2"/>',
+    t_cpu: '<rect x="6" y="6" width="12" height="12" rx="2.2"/><rect x="9.5" y="9.5" width="5" height="5" rx=".9"/><path d="M9 2.5V6M15 2.5V6M9 18v3.5M15 18v3.5M2.5 9H6M2.5 15H6M18 9h3.5M18 15h3.5"/>',
+    t_firewall: '<rect x="3" y="12.5" width="18" height="8.5" rx="1.3"/><path d="M3 16.8h18M8 12.5v4.3M16 12.5v4.3M12 16.8V21"/><path d="M12 10c-2 0-3.2-1.4-3.2-3.1 0-2.2 2.1-3.1 2.1-5.4 1.7 1.1 4.3 3.1 4.3 5.7 0 1.6-1.2 2.8-3.2 2.8z"/>',
+    t_rack: '<rect x="3" y="3" width="18" height="7.5" rx="2"/><rect x="3" y="13.5" width="18" height="7.5" rx="2"/><path d="M7 6.8h.01M7 17.3h.01M11 6.8h6M11 17.3h6"/>',
+    t_layers: '<path d="m12 2.5 10 5-10 5-10-5z"/><path d="m2 12.3 10 5 10-5"/><path d="m2 17 10 5 10-5"/>',
+    t_hex: '<path d="M12 2 21 7v10l-9 5-9-5V7z"/><path d="M12 7.2l4.4 2.5v4.9L12 17.1l-4.4-2.5V9.7z"/>',
+    t_python: '<path d="M12 3H9.2a3 3 0 0 0-3 3v3H12"/><path d="M6.2 9H5a3 3 0 0 0-3 3v1a3 3 0 0 0 3 3h2"/><path d="M12 21h2.8a3 3 0 0 0 3-3v-3H12"/><path d="M17.8 15H19a3 3 0 0 0 3-3v-1a3 3 0 0 0-3-3h-2"/><path d="M7 16v-2a2 2 0 0 1 2-2h6a2 2 0 0 0 2-2V8"/><path d="M9.6 5.8h.01M14.4 18.2h.01"/>',
+    t_gem: '<path d="M6 3.5h12l4 5.7-10 11.8L2 9.2z"/><path d="M2 9.2h20M12 21 8.2 9.2 12 3.5l3.8 5.7z"/>',
+    t_code: '<ellipse cx="12" cy="12" rx="10" ry="7.2"/><path d="m8.3 9.6-2.4 2.4 2.4 2.4M15.7 9.6l2.4 2.4-2.4 2.4M13.1 8.8l-2.2 6.4"/>',
+    t_password: '<rect x="2" y="6.5" width="20" height="11" rx="3"/><path d="M6.5 12h.01M10 12h.01M13.5 12h.01"/><path d="M17.5 9.5v5"/>',
+    t_account: '<circle cx="12" cy="12" r="9.5"/><circle cx="12" cy="10" r="3.2"/><path d="M6.3 18.6a6.6 6.6 0 0 1 11.4 0"/>',
+    t_contact: '<rect x="2" y="4" width="20" height="16" rx="2.5"/><circle cx="8" cy="11" r="2.6"/><path d="M4.4 17a3.6 3.6 0 0 1 7.2 0"/><path d="M14.5 9h5M14.5 13h5"/>',
+    t_lang: '<path d="M3 5h10M8 3v2M5.5 5c.6 3.2 2.7 6 6.5 8"/><path d="M10.6 5c-.6 3.2-2.8 6-7.1 8"/><path d="m12 21.5 4.5-10 4.5 10M13.5 18.2h6"/>',
+    t_usergear: '<circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 10.6-6"/><circle cx="18" cy="17" r="2.3"/><path d="M18 12.8v1.6M18 19.6v1.6M13.8 17h1.6M20.6 17h1.6M15 14l1.1 1.1M19.9 18.9 21 20M15 20l1.1-1.1M19.9 15.1 21 14"/>',
     metrics: '<path d="M3 21h18"/><rect x="4.5" y="15" width="3" height="6" rx="1"/><rect x="10.5" y="12" width="3" height="9" rx="1"/><rect x="16.5" y="13.5" width="3" height="7.5" rx="1"/><polyline points="4 10 9 6 13 8.5 20 3"/><polyline points="16 3 20 3 20 7"/>',
     chart: '<path d="M3 3v18h18"/><polyline points="7 15 11 10 14 13 20 6"/>',
     check: '<polyline points="20 6 9 17 4 12"/>',
@@ -1257,25 +1304,37 @@
   }
 
   const GROUP_COLORS = {
-    System: "#ff8a3d", Databases: "#b47cff", Domains: "#3fcf9a", Security: "#ff6b6b",
-    Files: "#ffb347", Metrics: "#6fb6ff", Software: "#7fd46b", Advanced: "#ff9a5c",
-    Preferences: "#f2c26b", Applications: "#21a1f1",
+    System: "#ff8a3d", Network: "#22c7d6", Databases: "#a78bfa", Domains: "#34d399", Email: "#f472b6", Security: "#f87171", Files: "#fbbf24", Metrics: "#60a5fa", Applications: "#818cf8", Software: "#a3e635", Advanced: "#2dd4bf", Preferences: "#cbd5e1",
+  };
+  // Every tool its own symbol (shared ones only where it's the same tool in two sections).
+  const TILE_ICON = {
+    "phpMyAdmin": "t_dbweb", "Manage Databases": "database", "MariaDB Wizard": "t_dbnew", "PostgreSQL Databases": "t_table",
+    "PostgreSQL Wizard": "t_tablenew", "phpPgAdmin": "t_tableweb", "Dynamic DNS": "t_ddns", "Email Accounts": "t_mailuser",
+    "Mailing Lists": "t_megaphone", "Track Delivery": "t_mailtrack", "Global Email Filters": "t_filterglobal", "Address Importer": "t_contactin",
+    "Spam Filters": "t_mailspam", "Encryption": "t_maillock", "Email Disk Usage": "t_pie", "VPN Overview": "t_vpnglobe",
+    "WireGuard": "t_bolt", "OpenVPN": "t_keyhole", "IPsec / IKEv2": "t_laptoplock", "Dynamic DNS Updater": "t_router",
+    "Panel HTTPS": "t_browserlock", "SSL/TLS Certificates": "t_cert", "Manage API Tokens": "t_apikey", "Hotlink Protection": "t_linkoff",
+    "WAF Firewall": "t_waf", "Two-Factor Authentication": "t_phonecheck", "Fix Home Permissions": "t_folderwrench", "Directory Privacy": "t_folderlock",
+    "Web Disk": "t_cloud", "FTP Accounts": "t_transfer", "Backup Wizard": "t_restore", "Inodes Usage": "t_grid",
+    "Resource Usage": "t_cpu", "Firewall": "t_firewall", "System Applications": "t_rack", "Application Manager": "t_layers",
+    "Setup Node.js App": "t_hex", "Setup Python App": "t_python", "Setup Ruby App": "t_gem", "PHP Settings": "t_code",
+    "Password & Security": "t_password", "Account Preferences": "t_account", "Contact Information": "t_contact", "Change Language": "t_lang",
+    "User Manager": "t_usergear",
   };
   function renderTiles(root) {
     root.innerHTML = "";
     for (const group of TILE_GROUPS) {
       const c = GROUP_COLORS[group.name] || "#ff8a3d";
-      const tint = `color-mix(in srgb, ${c} 15%, transparent)`;
       const grid = el("div", { class: "tile-grid" });
       for (const t of group.tiles) {
-        const ico = el("span", { class: "tile-ico", style: `background:${tint}; color:${c}` }, icon(t.icon, 19));
+        const ico = el("span", { class: "tile-ico" }, icon(TILE_ICON[t.label] || t.icon, 21));
         const tile = el("button", { class: `tile ${t.ext ? "ext" : ""}`, style: `--tile-accent:${c}`,
           onclick: () => {
             if (t.ext) window.open(`http://${location.hostname}${t.ext}`, "_blank");
             else navigate(t.view);
           } }, [
           ico,
-          el("span", { class: "tile-body" }, [el("span", { class: "tile-label", text: t.label }), t.ext ? el("span", { class: "tile-sub", text: "opens on port 80" }) : null]),
+          el("span", { class: "tile-body" }, [el("span", { class: "tile-label", text: t.label }), t.ext ? el("span", { class: "tile-sub", text: "opens in a new tab" }) : null]),
           el("span", { class: "tile-chev", text: "›" }),
         ]);
         grid.append(tile);
@@ -1283,12 +1342,12 @@
       const head = el("div", { class: "tile-group-head tgh", onclick: () => {
         const isC = !grid.hidden; grid.hidden = isC; head.classList.toggle("collapsed", isC); setTileCollapsed(group.name, isC);
       } }, [
-        el("span", { class: "gh-ico", style: `background:${tint}; color:${c}` }, icon(group.icon, 14)),
+        el("span", { class: "gh-ico" }, icon(group.icon, 15)),
         group.name,
         el("span", { class: "tgh-chev" }, icon("chevron", 13)),
       ]);
       if (getTileCollapsed().includes(group.name)) { grid.hidden = true; head.classList.add("collapsed"); }
-      root.append(el("div", { class: "tile-group" }, [head, grid]));
+      root.append(el("div", { class: "tile-group", style: `--tile-accent:${c}` }, [head, grid]));
     }
   }
   function getTileCollapsed() { try { return JSON.parse(localStorage.getItem("aurora-tiles-collapsed") || "[]"); } catch (e) { return []; } }
@@ -1328,37 +1387,65 @@
   //  Services
   // ======================================================================
   function viewServices(root) {
-    const bar = el("div", { class: "toolbar" }, [
-      el("input", { id: "svc-filter", type: "text", placeholder: "Filter services…", style: "max-width:280px" }),
-    ]);
+    // Group units by what they're doing, so the page answers "what's running / what's broken" at a glance.
+    const KINDS = [
+      ["running", "Running", "good", "Services working right now."],
+      ["failed", "Failed", "bad", "Crashed or couldn't start — these need a look (Status shows why)."],
+      ["exited", "Finished", "dim", "One-shot jobs that ran at boot and exited. That's normal: there's nothing to keep running."],
+      ["stopped", "Stopped", "dim", "Not running. Many are started only when needed (timers, sockets) — not an error."],
+      ["all", "All", "", ""],
+    ];
+    const kindOf = (s) => (s.active === "failed" || s.sub === "failed" ? "failed" : s.active === "active" || s.active === "reloading" || s.active === "activating"
+      ? (s.sub === "exited" ? "exited" : "running") : "stopped");
+    let all = [], kind = null;
+    const search = el("input", { id: "svc-filter", type: "search", placeholder: "Filter services…", style: "max-width:280px" });
+    const chips = el("div", { class: "svc-kinds" });
+    const hint = el("p", { class: "muted svc-hint" });
     const body = el("div", { id: "svc-body" }, el("div", { class: "loading", text: "Loading services…" }));
-    root.append(bar, body);
+    root.append(el("div", { class: "toolbar svc-bar" }, [chips, el("span", { class: "grow" }), search]), hint, body);
 
-    let all = [];
+    const row = (s) => {
+      const k = kindOf(s), running = s.active === "active";
+      const label = { running: "running", failed: "failed", exited: "finished", stopped: "stopped" }[k];
+      return el("tr", { class: `svc-${k}` }, [
+        el("td", {}, el("span", { class: "svc-unit", text: s.unit.replace(/\.service$/, "") })),
+        el("td", {}, el("span", { class: `pill ${k === "running" ? "good" : k === "failed" ? "bad" : "dim"}`, text: label })),
+        el("td", { class: "muted svc-desc", text: s.description, title: s.description }),
+        el("td", { class: "actions" }, [
+          el("button", { class: "btn btn-sm", text: running ? "Restart" : "Start", onclick: () => svcAction(s.unit, running ? "restart" : "start") }),
+          running ? el("button", { class: "btn btn-sm btn-danger", text: "Stop", onclick: () => svcAction(s.unit, "stop") }) : null,
+          el("button", { class: "btn btn-sm btn-ghost", text: "Status", onclick: () => svcShowStatus(s.unit) }),
+        ]),
+      ]);
+    };
+    const table = (list) => el("div", { class: "table-wrap" }, el("table", { class: "svc-table" }, [
+      el("thead", {}, el("tr", {}, ["Service", "State", "Description", ""].map((h) => el("th", { text: h })))),
+      el("tbody", {}, list.map(row)),
+    ]));
     const render = () => {
-      const q = $("#svc-filter").value.toLowerCase();
-      const list = all.filter((s) => s.unit.toLowerCase().includes(q) || (s.description || "").toLowerCase().includes(q));
+      const q = search.value.toLowerCase();
+      const match = all.filter((s) => s.unit.toLowerCase().includes(q) || (s.description || "").toLowerCase().includes(q));
+      const counts = { all: match.length };
+      match.forEach((s) => { const k = kindOf(s); counts[k] = (counts[k] || 0) + 1; });
+      if (!kind) kind = all.some((s) => kindOf(s) === "failed") ? "failed" : "running";
+      chips.innerHTML = "";
+      KINDS.forEach(([k, l, tone]) => chips.append(el("button", { type: "button", class: `svc-kind ${k === kind ? "on" : ""} ${tone} ${k === "failed" && counts.failed ? "alert" : ""}`,
+        onclick: () => { kind = k; render(); } }, [el("span", { text: l }), el("b", { text: String(counts[k] || 0) })])));
+      const info = KINDS.find((x) => x[0] === kind);
+      hint.textContent = info[3];
+      hint.hidden = !info[3];
       body.innerHTML = "";
       if (!all.length) { body.append(el("p", { class: "empty", text: "No systemd services (this host isn't running systemd)." })); return; }
-      const rows = list.map((s) => {
-        const running = s.active === "active";
-        return el("tr", {}, [
-          el("td", {}, el("span", { text: s.unit })),
-          el("td", {}, el("span", { class: `pill ${running ? "good" : s.active === "failed" ? "bad" : "dim"}`, text: s.active })),
-          el("td", { class: "muted", text: s.sub }),
-          el("td", { class: "muted", text: s.description, style: "max-width:340px;overflow:hidden;text-overflow:ellipsis" }),
-          el("td", { class: "actions" }, [
-            el("button", { class: "btn btn-sm", text: running ? "Restart" : "Start",
-              onclick: () => svcAction(s.unit, running ? "restart" : "start") }),
-            running ? el("button", { class: "btn btn-sm btn-danger", text: "Stop", onclick: () => svcAction(s.unit, "stop") }) : null,
-            el("button", { class: "btn btn-sm btn-ghost", text: "Status", onclick: () => svcShowStatus(s.unit) }),
-          ]),
-        ]);
-      });
-      body.append(el("div", { class: "table-wrap" }, el("table", {}, [
-        el("thead", {}, el("tr", {}, ["Unit", "State", "Sub", "Description", ""].map((h) => el("th", { text: h })))),
-        el("tbody", {}, rows),
-      ])));
+      if (kind === "all") {
+        for (const [k, l, , h] of KINDS.slice(0, 4)) {
+          const list = match.filter((s) => kindOf(s) === k);
+          if (!list.length) continue;
+          body.append(el("div", { class: "svc-group" }, [el("h3", {}, [l, el("span", { class: "muted", text: ` · ${list.length}` })]), el("p", { class: "muted svc-hint", text: h }), table(list)]));
+        }
+        return;
+      }
+      const list = match.filter((s) => kindOf(s) === kind);
+      body.append(list.length ? table(list) : el("p", { class: "empty", text: kind === "failed" ? "Nothing has failed — every service started cleanly." : "Nothing here." }));
     };
 
     const load = async () => {
@@ -1368,7 +1455,7 @@
         render();
       });
     };
-    $("#svc-filter").addEventListener("input", render);
+    search.addEventListener("input", render);
     state.refreshHandler = load;
     load();
 

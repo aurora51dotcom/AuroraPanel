@@ -1177,3 +1177,98 @@ def analytics(sid: str, days: int = 30, file: str = "", name: str = "") -> dict:
         "referrers": top(referrers), "engines": top(engines), "phrases": top(phrases), "social": top(social),
         "users": top(users), "durations": dur,
     }
+
+
+# --------------------------------------------------------------------------- #
+# One IP: who owns it, what it did here, and whether it's banned or trusted
+# --------------------------------------------------------------------------- #
+def _ptr(ip: str) -> str:
+    import socket
+    box: list[str] = []
+    t = threading.Thread(target=lambda: box.append(socket.gethostbyaddr(ip)[0]), daemon=True)
+    try:
+        t.start()
+        t.join(3)
+    except OSError:
+        pass
+    return box[0] if box else ""
+
+
+def ip_info(ip: str, days: int = 7) -> dict:
+    import ipaddress
+    try:
+        ip = str(ipaddress.ip_address(ip.strip()))
+    except ValueError:
+        raise MetricsError("That isn't an IP address")
+    out: dict = {"ip": ip, "ptr": _ptr(ip), "days": days}
+    a = ipaddress.ip_address(ip)
+    out["private"] = a.is_private or a.is_loopback or a.is_link_local
+    owner = {}
+    if not out["private"]:
+        try:
+            from . import abuse
+            owner = abuse.lookup(ip)
+        except Exception as e:
+            owner = {"error": str(e)}
+    out["owner"] = owner
+    # Ban / trust state, with the details the IP Blocker keeps
+    state: dict = {"status": ""}
+    try:
+        from . import guard
+        state["status"] = guard.status_of([ip]).get(ip, "")
+        g = guard.listing()
+        for b in g["bans"]:
+            if a in ipaddress.ip_network(b["cidr"]):
+                state.update(kind="manual", cidr=b["cidr"], reason=b.get("reason", ""), expires=b.get("expires"), created=b.get("created"))
+        for f in g["fail2ban"]:
+            if f["ip"] == ip:
+                state.update(kind="fail2ban", jails=f["jails"], expires_in=f["expires_in"])
+        for t in g["trusted"]:
+            if a in ipaddress.ip_network(t["cidr"]):
+                state.update(kind="trusted", cidr=t["cidr"], reason=t.get("note") or t.get("reason", ""))
+        state["enabled"] = g["enabled"]
+    except Exception as e:
+        state["error"] = str(e)
+    out["state"] = state
+    # What it did on the websites
+    since = time.time() - days * 86400
+    hits = pages = nbytes = 0
+    first = last = 0.0
+    per_site: Counter = Counter()
+    urls: Counter = Counter()
+    uas: Counter = Counter()
+    status: Counter = Counter()
+    recent: list[dict] = []
+    for s in sites():
+        for _, e in _entries(s, since):
+            if e["ip"] != ip:
+                continue
+            hits += 1
+            nbytes += e["size"]
+            pages += is_page(e["url"], e["status"])
+            first = e["ts"] if not first or e["ts"] < first else first
+            last = max(last, e["ts"])
+            per_site[e["vhost"] or s["label"]] += 1
+            urls[e["url"][:200]] += 1
+            uas[e["ua"][:200]] += 1
+            status[e["status"]] += 1
+            recent.append({k: e[k] for k in ("ts", "method", "url", "status", "size", "ua", "ref")} | {"site": e["vhost"] or s["label"]})
+    recent.sort(key=lambda r: -r["ts"])
+    out["web"] = {"hits": hits, "pages": pages, "bytes": nbytes, "first": first, "last": last,
+                  "sites": per_site.most_common(10), "urls": urls.most_common(12),
+                  "agents": [{"ua": k, "n": n, **classify_ua(k)} for k, n in uas.most_common(5)],
+                  "status": sorted(status.items()), "recent": recent[:40]}
+    try:
+        from . import waf
+        ev = waf.events(hours=days * 24, limit=500, ip=ip)
+        out["waf"] = {"events": len(ev), "blocked": sum(1 for e in ev if e["blocked"]),
+                      "types": Counter(waf._primary(e["rules"])["category"] for e in ev).most_common(5)}
+    except Exception:
+        out["waf"] = {"events": 0, "blocked": 0, "types": []}
+    try:
+        from . import abuse
+        out["logins_failed"] = sum(1 for e in abuse.evidence(ip, days) if e.get("kind") != "attack")
+        out["reported"] = abuse.reported().get(ip)
+    except Exception:
+        out["logins_failed"], out["reported"] = 0, None
+    return out
