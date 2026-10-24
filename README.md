@@ -7,14 +7,13 @@ databases, fail2ban, FTP, backups, Git and more — all from your browser.
 Built with **FastAPI** (Python) + a dependency-free **vanilla JS** frontend, so
 there's nothing to compile on the Pi.
 
-**Version: Beta v1.0.19** (`1.0.19-beta`) — a free, open-source hobby project (MIT License). Website: https://aurora51.com
+**Version: v1.1.0** (`1.1.0`) — a free, open-source hobby project (MIT License). Website: https://aurora51.com
 
 To update, open **Preferences → About & Updates → Check for updates** in the panel (it only contacts
 aurora51.com when you click), or re-download the zip, unzip it over your install and re-run `sudo bash install.sh`.
 
 **Feedback, bugs and ideas:** please share them in the
-[Reddit thread](https://www.reddit.com/r/RASPBERRY_PI_PROJECTS/comments/1ws2int/made_a_web_control_panel_for_raspberry_pi_and/)
-or the [Raspberry Pi Forums thread](https://forums.raspberrypi.com/viewtopic.php?p=2388892).
+[Raspberry Pi Forums thread](https://forums.raspberrypi.com/viewtopic.php?p=2388892).
 
 ## Features
 

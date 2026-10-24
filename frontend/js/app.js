@@ -7327,7 +7327,6 @@
     })();
   }
   // ---- About & Updates ----
-  const REDDIT_URL = "https://www.reddit.com/r/RASPBERRY_PI_PROJECTS/comments/1ws2int/made_a_web_control_panel_for_raspberry_pi_and/";
   const FORUM_URL = "https://forums.raspberrypi.com/viewtopic.php?p=2388892";
   function viewAbout(root) {
     const body = el("div", {}, el("div", { class: "loading", text: "Loading…" }));
@@ -7359,8 +7358,7 @@
         el("p", { class: "muted", text: "A free, open-source (MIT) control panel for the Raspberry Pi and Ubuntu / Debian servers. Found something odd? Please report it." }),
         kv([["Version", a.version], ["Installed in", a.install_dir], ["Website", el("a", { href: a.site, target: "_blank", rel: "noopener noreferrer", text: "aurora51.com ↗" })]]),
         el("div", { class: "toolbar", style: "margin:16px 0 0" }, [check, viewChanges,
-          el("a", { class: "btn btn-sm btn-ghost", href: REDDIT_URL, target: "_blank", rel: "noopener noreferrer", text: "Feedback on Reddit ↗" }),
-          el("a", { class: "btn btn-sm btn-ghost", href: FORUM_URL, target: "_blank", rel: "noopener noreferrer", text: "Raspberry Pi Forums ↗" })]),
+          el("a", { class: "btn btn-sm btn-ghost", href: FORUM_URL, target: "_blank", rel: "noopener noreferrer", text: "Feedback on the Raspberry Pi Forums ↗" })]),
         el("div", { class: "about-privacy" }, [icon("lock", 14), el("span", { text: "The panel never contacts the internet on its own — it only asks aurora51.com for the latest version or the change log when you click one of these buttons." })]),
       ]), changes, result);
 
