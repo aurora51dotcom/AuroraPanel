@@ -197,6 +197,11 @@ def sites() -> list[dict]:
                     "error_logs": sorted(e["error_logs"]), "exists": p.exists(),
                     "size": sum(f["size"] for f in files), "updated": max((f["mtime"] for f in files), default=0)})
     order = {"site": 0, "shared": 1, "default": 2}
+    from . import authz
+    sc = authz.scope()
+    if sc is not None:  # a website manager: only logs that belong to their sites
+        mine = {n.lower() for n in sc["domains"]} | {"www." + n for n in sc["domains"]}
+        out = [s for s in out if s["kind"] == "site" and mine & {n.lower() for n in s["names"]}]
     return sorted(out, key=lambda s: (order[s["kind"]], s["label"]))
 
 
@@ -444,6 +449,14 @@ def _journal_errors(cat: str, since: float, prio: str = "warning") -> list[dict]
 def errors(sid: str = "", hours: int = 24, sources: str = "web,mail,database,dns,php_fpm,panel,system") -> dict:
     since = time.time() - max(1, min(hours, 24 * 31)) * 3600
     want = set(sources.split(","))
+    from . import authz
+    if authz.scope() is not None:  # a website manager: their own sites' web errors only
+        if not sid:
+            mine = sites()
+            if not mine:
+                raise MetricsError("No websites")
+            sid = mine[0]["id"]
+        want = {"web"}
     items: list[dict] = []
     if "web" in want:
         if sid:

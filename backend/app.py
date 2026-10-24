@@ -25,7 +25,7 @@ from starlette.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel
 
 from . import (
-    abuse, alerts, antivirus, audit, autossl, dockerapps, isolate, servers, schedules, tasks, updates, apache, apitokens, appmanager, auth, backups, config, cron,
+    abuse, alerts, antivirus, audit, authz, autossl, dockerapps, isolate, panelusers, servers, schedules, tasks, updates, apache, apitokens, appmanager, auth, backups, config, cron,
     apps, databases, diskusage, dnszones, domains, fail2ban, netmgr, sites, files, firewall, ipblocker, jobs,
     metrics, modsecurity, netdiag, waf, packages, perms, phpmgr, services, sslcerts, sshaccess,
     sysapps, system_info, terminal, twofa, users,
@@ -71,7 +71,8 @@ class _GZipFrontend(GZipMiddleware):
 
 
 app.add_middleware(_GZipFrontend, minimum_size=1024)
-app.add_middleware(audit.AuditMiddleware)
+app.add_middleware(authz.AuthzMiddleware)
+app.add_middleware(audit.AuditMiddleware)  # outermost: also records refused calls
 
 
 @app.middleware("http")
@@ -242,10 +243,13 @@ def api_login(body: LoginBody, request: Request):
     wait = _login_begin(ip)
     if wait:
         raise HTTPException(status_code=429, detail=f"Too many failed logins. Try again in {(wait + 59) // 60} min.")
-    if not config.verify_credentials(body.username, body.password):
+    is_owner = config.verify_credentials(body.username, body.password)
+    if not is_owner and not panelusers.verify(body.username, body.password):
         _auth_log(False, body.username, request)
         raise HTTPException(status_code=401, detail="Invalid credentials")
-    if twofa.is_enabled():
+    if not is_owner:
+        panelusers.touch(body.username)
+    if is_owner and twofa.is_enabled():
         if not body.otp:
             # Right password, code still to come: don't count this one.
             _login_forgive(ip)
@@ -276,9 +280,77 @@ def api_audit(days: int = 30, q: str = "", user: str = "", failed: bool = False,
 @app.get("/api/me")
 def api_me(user: str = auth.CurrentUser):
     owner = files.default_user()
-    return {"username": user,
-            "system_user": owner.pw_name if owner else None,
-            "home": owner.pw_dir if owner else None}
+    me = panelusers.get(user) or {"role": "admin", "sites": []}
+    full = me["role"] == "admin"  # limited users don't need to know the server's Linux account
+    return {"username": user, "role": me["role"], "sites": me.get("sites", []), "owner": bool(me.get("owner")),
+            "system_user": owner.pw_name if owner and full else None,
+            "home": owner.pw_dir if owner and full else None}
+
+
+class OwnPasswordBody(BaseModel):
+    current: str
+    new: str
+
+
+@app.post("/api/me/password")
+def api_me_password(body: OwnPasswordBody, user: str = auth.CurrentUser):
+    """A panel user changes their own password (the owner uses Password & Security)."""
+    try:
+        return panelusers.change_own_password(user, body.current, body.new)
+    except panelusers.PanelUserError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/mysites")
+def api_mysites(user: str = auth.CurrentUser):
+    """A website manager's home page: their sites with links to what they may use."""
+    me = panelusers.get(user) or {"sites": []}
+    out = []
+    for name in me.get("sites", []):
+        try:
+            st = sites.get_site(name)["settings"]
+            out.append({"name": name, "docroot": st["docroot"], "ssl": st["ssl"], "aliases": st.get("aliases", [])})
+        except Exception:
+            continue
+    return {"sites": out, "webmail": mail.webmail_url() if mail.installed() else ""}
+
+
+# --------------------------------------------------------------------------- #
+# Panel users (roles)
+# --------------------------------------------------------------------------- #
+def _pu_call(fn):
+    try:
+        return fn()
+    except panelusers.PanelUserError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/panel-users")
+def api_pu(user: str = auth.CurrentUser):
+    return {**panelusers.listing(), "sites": [s["server_name"] for s in sites.list_sites().get("sites", []) if not s.get("system")]}
+
+
+class PanelUserBody(BaseModel):
+    username: str
+    password: str | None = None
+    role: str | None = None
+    sites: list[str] | None = None
+    disabled: bool | None = None
+
+
+@app.post("/api/panel-users")
+def api_pu_create(body: PanelUserBody, user: str = auth.CurrentUser):
+    return _pu_call(lambda: panelusers.create(body.username, body.password or "", body.role or "viewer", body.sites))
+
+
+@app.post("/api/panel-users/update")
+def api_pu_update(body: PanelUserBody, user: str = auth.CurrentUser):
+    return _pu_call(lambda: panelusers.update(body.username, body.role, body.sites, body.password, body.disabled))
+
+
+@app.post("/api/panel-users/delete")
+def api_pu_delete(body: PanelUserBody, user: str = auth.CurrentUser):
+    return _pu_call(lambda: panelusers.delete(body.username))
 
 
 # --------------------------------------------------------------------------- #
@@ -3943,7 +4015,9 @@ def ddns_public_nic(request: Request, hostname: str = "", myip: str = ""):
 async def api_terminal(websocket: WebSocket):
     # Authenticate via the same session cookie before accepting.
     token = websocket.cookies.get(auth.COOKIE_NAME)
-    if not token or not auth.verify_token(token):
+    name = auth.verify_token(token) if token else None
+    me = panelusers.get(name) if name else None
+    if not me or me["role"] != "admin":  # a root shell is for administrators only
         await websocket.close(code=1008)
         return
     await websocket.accept()

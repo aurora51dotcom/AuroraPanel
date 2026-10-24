@@ -61,6 +61,11 @@ def require_auth(request: Request) -> str:
         name = apitokens.verify(api_tok) if api_tok else None
         if name:
             username = f"token:{name}"
+    if username and not username.startswith("token:"):
+        # A deleted or disabled panel user's session ends at once.
+        from . import panelusers
+        if not panelusers.get(username):
+            username = None
     if not username:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required"

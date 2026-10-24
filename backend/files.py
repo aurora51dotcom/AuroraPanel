@@ -77,6 +77,10 @@ def _site_roots() -> list[Path]:
 def allowed_roots() -> list[Path]:
     """Shortcut folders shown above the listing; with AURORA_FILE_ROOT, the only folder allowed."""
     global _roots_cache
+    from . import authz
+    sc = authz.scope()
+    if sc is not None:
+        return list(sc["roots"])
     if os.environ.get("AURORA_FILE_ROOT"):
         return [FILE_ROOT]
     if time.time() - _roots_cache[0] < 10:
@@ -93,6 +97,9 @@ def allowed_roots() -> list[Path]:
 def _allowed(p: Path) -> bool:
     # The panel runs as root with a root Terminal, so browsing the whole Pi adds no access;
     # AURORA_FILE_ROOT still confines the File Manager to one folder.
+    from . import authz
+    if authz.scope() is not None:  # a website manager: their own sites' folders only
+        return authz.in_roots(p)
     if not os.environ.get("AURORA_FILE_ROOT"):
         return True
     return p == FILE_ROOT or FILE_ROOT in p.parents
@@ -140,10 +147,27 @@ def _resolve(path: str) -> Path:
     """Resolve a client-supplied path (absolute, or relative to FILE_ROOT) inside the allowed folders."""
     _refresh_root()
     p = (path or "").strip()
-    candidate = Path(p).resolve() if p.startswith("/") else (FILE_ROOT / p.lstrip("\\")).resolve()
+    from . import authz
+    sc = authz.scope()
+    base = sc["roots"][0] if sc and sc["roots"] else FILE_ROOT
+    candidate = Path(p).resolve() if p.startswith("/") else (base / p.lstrip("\\")).resolve()
     if not _allowed(candidate):
+        if sc is not None:
+            raise FileError("That folder isn't part of your websites")
         raise FileError(f"The File Manager is limited to {_rel(FILE_ROOT)} (AURORA_FILE_ROOT)")
     return candidate
+
+
+def _give_to_site(p: Path) -> None:
+    """Files written into an isolated site belong to that site, so its PHP can still update them."""
+    try:
+        from . import isolate
+        own = isolate.owner_of(str(p))
+        if own:
+            import shutil
+            shutil.chown(p, own[0], own[1])
+    except Exception:
+        pass
 
 
 def _rel(p: Path) -> str:
@@ -184,7 +208,7 @@ def list_dir(rel_path: str) -> dict:
 
     entries.sort(key=lambda e: (not e["is_dir"], e["name"].lower()))
     return {
-        "root": _rel(FILE_ROOT),
+        "root": _rel(allowed_roots()[0] if allowed_roots() else FILE_ROOT),
         "roots": [_rel(r) for r in allowed_roots()],
         "cwd": _rel(target),
         "parent": _rel(target.parent) if target != target.parent and _allowed(target.parent) else None,
@@ -209,7 +233,10 @@ def write_text(rel_path: str, content: str) -> dict:
     target = _resolve(rel_path)
     if target.is_dir():
         raise FileError("Cannot write to a directory")
+    new = not target.exists()
     target.write_text(content, encoding="utf-8")
+    if new:
+        _give_to_site(target)
     return {"path": _rel(target), "size": target.stat().st_size}
 
 
@@ -396,6 +423,7 @@ def make_dir(rel_path: str, name: str) -> dict:
         raise FileError("Invalid folder name")
     new_dir = _resolve(str(Path(_rel(parent)) / name))
     new_dir.mkdir(parents=False, exist_ok=False)
+    _give_to_site(new_dir)
     return {"created": _rel(new_dir)}
 
 
@@ -409,6 +437,7 @@ def save_upload(rel_dir: str, filename: str, data: bytes) -> dict:
     dest = _resolve(str(Path(_rel(parent)) / safe_name))
     with open(dest, "wb") as fh:
         fh.write(data)
+    _give_to_site(dest)
     return {"uploaded": _rel(dest), "size": len(data)}
 
 

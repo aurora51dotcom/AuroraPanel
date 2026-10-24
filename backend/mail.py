@@ -383,10 +383,13 @@ def set_catchall(d: str, mode: str, target: str = "", message: str = "") -> dict
 
 # ----------------------------------------------------------------------------- accounts
 def list_accounts() -> dict:
+    from . import authz
     s = load()
     usage = _quota_usage()
     out = []
     for a, acc in sorted(s["accounts"].items()):
+        if not authz.domain_ok(a.split("@")[1]):
+            continue
         used = usage.get(a, 0)
         q = acc.get("quota_mb", 0)
         out.append({"address": a, "domain": a.split("@")[1], "name": acc.get("name", ""), "quota_mb": q,
@@ -395,7 +398,8 @@ def list_accounts() -> dict:
                     "autoresponder": bool(s["autoresponders"].get(a, {}).get("enabled")),
                     "filters": len(s["filters"].get(a, [])),
                     "forwards": [k for k, v in s["forwarders"].items() if a in v.get("dest", [])]})
-    return {"accounts": out, "domains": sorted(s["domains"]), "candidates": candidate_domains(),
+    doms = sorted(d for d in s["domains"] if authz.domain_ok(d))
+    return {"accounts": out, "domains": doms, "candidates": candidate_domains() if authz.scope() is None else [],
             "hostname": hostname(s), "webmail": webmail_url()}
 
 
@@ -418,6 +422,9 @@ def _quota_usage() -> dict[str, int]:
 
 
 def create_account(address: str, password: str, quota_mb: int = 1024, name: str = "") -> dict:
+    from . import authz
+    if authz.scope() is not None and not authz.domain_ok(str(address).rsplit('@', 1)[-1].strip().lower()):
+        raise MailError("That address isn't on one of your websites' domains")
     _require()
     s = load()
     a = _addr(address)
@@ -440,6 +447,9 @@ def create_account(address: str, password: str, quota_mb: int = 1024, name: str 
 
 def update_account(address: str, password: str | None = None, quota_mb: int | None = None,
                    suspend: dict | None = None, name: str | None = None) -> dict:
+    from . import authz
+    if authz.scope() is not None and not authz.domain_ok(str(address).rsplit('@', 1)[-1].strip().lower()):
+        raise MailError("That address isn't on one of your websites' domains")
     s = load()
     a = _addr(address)
     acc = s["accounts"].get(a)
@@ -464,6 +474,9 @@ def update_account(address: str, password: str | None = None, quota_mb: int | No
 
 
 def delete_account(address: str, delete_mail: bool = False) -> dict:
+    from . import authz
+    if authz.scope() is not None and not authz.domain_ok(str(address).rsplit('@', 1)[-1].strip().lower()):
+        raise MailError("That address isn't on one of your websites' domains")
     s = load()
     a = _addr(address)
     if a not in s["accounts"]:
@@ -490,6 +503,9 @@ def _home(a: str) -> Path:
 
 
 def device_settings(address: str) -> dict:
+    from . import authz
+    if authz.scope() is not None and not authz.domain_ok(str(address).rsplit('@', 1)[-1].strip().lower()):
+        raise MailError("That address isn't on one of your websites' domains")
     a = _addr(address)
     h = hostname()
     return {"address": a, "username": a, "incoming": {"imap": {"host": h, "port": 993, "security": "SSL/TLS"},
@@ -499,6 +515,9 @@ def device_settings(address: str) -> dict:
 
 
 def mobileconfig(address: str) -> str:
+    from . import authz
+    if authz.scope() is not None and not authz.domain_ok(str(address).rsplit('@', 1)[-1].strip().lower()):
+        raise MailError("That address isn't on one of your websites' domains")
     """Apple configuration profile (iPhone, iPad, Mac): one tap sets up the account."""
     a = _addr(address)
     h = hostname()

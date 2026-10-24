@@ -719,6 +719,81 @@ window.AuroraOps = (ui) => {
     const t = setInterval(load, 60000); state.cleanups.push(() => clearInterval(t));
   }
 
+  // ======================================================================
+  //  A website manager's home: My Websites
+  // ======================================================================
+  async function viewMySites(root) {
+    root.append(pageHead("My Websites", "The websites you manage on this server — their files, email accounts and visitors."));
+    const body = el("div", {}, el("div", { class: "loading", text: "Loading…" }));
+    root.append(body);
+    let d;
+    try { d = await API.mySites(); } catch (e) { body.innerHTML = ""; body.append(el("p", { class: "empty", text: e.message })); return; }
+    body.innerHTML = "";
+    if (!d.sites.length) { body.append(el("div", { class: "card" }, empty("globe", "No websites assigned yet", "Ask the server's administrator to give you access to your websites."))); }
+    body.append(el("div", { class: "op-dapps" }, d.sites.map((s) => el("div", { class: "op-dapp" }, [
+      el("div", { class: "op-dapp-h" }, [el("span", { class: "op-dapp-ico", style: `--h:${APP_HUE(s.name)}`, text: s.name[0].toUpperCase() }),
+        el("div", { class: "grow" }, [el("b", { text: s.name }), el("p", { class: "muted mx-small mx-ell", text: s.docroot })]), pill(s.ssl === "none" ? "http" : "https", s.ssl === "none" ? "dim" : "good")]),
+      el("a", { class: "op-dapp-url", href: `${s.ssl === "none" ? "http" : "https"}://${s.name}/`, target: "_blank", rel: "noopener", text: `${s.name} ↗` }),
+      el("div", { class: "op-dapp-act" }, [btn("Files", () => navigate("files", { arg: s.docroot }), "btn-primary"), btn("Email accounts", () => navigate("mailaccounts"), "btn-ghost"),
+        btn("Visitors", () => navigate("visitors"), "btn-ghost"), btn("Analytics", () => navigate("analytics"), "btn-ghost"), btn("Errors", () => navigate("errors"), "btn-ghost"),
+        d.webmail ? el("a", { class: "btn btn-sm btn-ghost", href: d.webmail.startsWith("/") ? `https://${location.hostname}${d.webmail}` : d.webmail, target: "_blank", rel: "noopener", text: "Webmail ↗" }) : null]),
+    ]))));
+    const cur = el("input", { type: "password", autocomplete: "current-password" });
+    const nw = el("input", { type: "password", autocomplete: "new-password" });
+    body.append(card("Change my password", [el("div", { class: "mx-grid2" }, [field("Current password", cur), field("New password (10+ characters)", nw)]),
+      el("div", { class: "toolbar" }, [btn("Change password", () => call(() => API.myPassword(cur.value, nw.value), "Password changed", () => { cur.value = nw.value = ""; }), "btn-primary")])]));
+  }
+
+  // ======================================================================
+  //  Preferences → Panel Users
+  // ======================================================================
+  const ROLE_TXT = { admin: ["Administrator", "Everything, like you."], viewer: ["Viewer", "Sees every page, changes nothing, can't open files or secrets."],
+    site: ["Website manager", "Only their own websites: files, email accounts, visitors. Nothing else on the server."] };
+  async function viewPanelUsers(root) {
+    root.append(pageHead("Panel Users", "Let other people into the panel with just the power they need — a colleague who only watches, or a client who manages their own website and mailboxes.",
+      [btn("Add a user", () => editor(), "btn-primary")]));
+    const body = el("div", {}, el("div", { class: "loading", text: "Loading…" }));
+    root.append(body);
+    let d;
+    async function load() {
+      try { d = await API.panelUsers(); } catch (e) { body.innerHTML = ""; body.append(el("p", { class: "empty", text: e.message })); return; }
+      body.innerHTML = "";
+      body.append(card(`Users (${d.users.length})`, [el("div", { class: "op-isos" }, d.users.map((u) => el("div", { class: `op-iso ${u.disabled ? "" : "on"}` }, [
+        el("span", { class: "op-dapp-ico", style: `--h:${APP_HUE(u.username)}`, text: u.username[0].toUpperCase() }),
+        el("div", { class: "grow" }, [el("b", { text: u.username }), el("p", { class: "muted mx-small mx-ell", text: u.owner ? "Owner — set up this panel" :
+          `${ROLE_TXT[u.role][0]}${u.sites && u.sites.length ? ` · ${u.sites.join(", ")}` : ""}${u.last_login ? ` · last sign-in ${ago(u.last_login)}` : " · never signed in"}` })]),
+        pill(u.disabled ? "disabled" : ROLE_TXT[u.role][0], u.disabled ? "dim" : u.role === "admin" ? "warn" : u.role === "site" ? "good" : "dim"),
+        u.owner ? null : btn("Edit", () => editor(u), "btn-ghost"),
+        u.owner ? null : armed("Delete", "Click again", () => call(() => API.panelUserDelete(u.username), "User deleted — signed out at once", load), "btn-ghost"),
+      ])))]),
+      card("What each role can do", [el("div", { class: "mx-list" }, Object.entries(ROLE_TXT).map(([k, [l, h]]) => el("div", { class: "mx-list-row" }, [pill(l, k === "admin" ? "warn" : k === "site" ? "good" : "dim"), el("span", { class: "grow", text: h })])))]));
+    }
+    function editor(u = null) {
+      let role = u ? u.role : "site";
+      const name = el("input", { type: "text", value: u ? u.username : "", disabled: u ? "" : null, autocomplete: "off" });
+      const pw = el("input", { type: "text", placeholder: u ? "(unchanged — leave empty)" : "at least 10 characters", autocomplete: "off" });
+      const gen = btn("Generate", () => { const a = new Uint32Array(16); crypto.getRandomValues(a); pw.value = Array.from(a, (n) => "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"[n % 57]).join(""); }, "btn-ghost");
+      const siteBox = el("div", { class: "op-destpick" }, d.sites.map((s) => { const c = el("input", { type: "checkbox", value: s }); c.checked = !!(u && u.sites && u.sites.includes(s)); return el("label", { class: "dm-check" }, [c, el("span", { text: s })]); }));
+      const siteWrap = el("div", {}, [el("div", { class: "mx-sub" }, "Websites they manage"), d.sites.length ? siteBox : el("p", { class: "muted", text: "No websites yet — create one under Domains first." })]);
+      siteWrap.hidden = role !== "site";
+      const rc = el("div", { class: "em-rcards" });
+      Object.entries(ROLE_TXT).forEach(([k, [l, h]]) => { const r = el("input", { type: "radio", name: "role", value: k }); r.checked = k === role; r.onchange = () => { role = k; siteWrap.hidden = role !== "site"; };
+        rc.append(el("label", { class: "em-rcard" }, [r, el("span", { class: "em-rcard-ico" }, icon(k === "admin" ? "key" : k === "site" ? "globe" : "search", 18)), el("div", {}, [el("div", { class: "em-rcard-t" }, el("b", { text: l })), el("p", { class: "muted", text: h })])])); });
+      const dis = el("input", { type: "checkbox" }); dis.checked = !!(u && u.disabled);
+      openModal(u ? `Edit ${u.username}` : "Add a user", el("div", { class: "em-form" }, [
+        el("div", { class: "mx-grid2" }, [field("User name", name), field("Password", el("div", { class: "op-pwrow" }, [pw, gen]), "Share it with them privately; they can change it on their home page.")]),
+        el("div", { class: "mx-sub" }, "Role"), rc, siteWrap,
+        u ? el("label", { class: "dm-check" }, [dis, el("span", { text: "Disabled (can't sign in)" })]) : null,
+      ]), [el("button", { class: "btn btn-primary", text: u ? "Save" : "Add user", onclick: () => {
+        const sites = [...siteBox.querySelectorAll("input:checked")].map((c) => c.value);
+        call(() => u ? API.panelUserUpdate({ username: u.username, role, sites, password: pw.value || null, disabled: dis.checked })
+          : API.panelUserCreate({ username: name.value.trim(), password: pw.value, role, sites }), u ? "Saved" : "User added", () => { closeModal(); load(); });
+      } })]);
+      modalWide();
+    }
+    load();
+  }
+
   return { activity: viewActivity, alerts: viewAlerts, schedbackups: viewSchedBackups, updates: viewUpdates, autossl: viewAutoSSL, isolation: viewIsolation,
-    dockerapps: viewDockerApps, servers: viewServers };
+    dockerapps: viewDockerApps, servers: viewServers, mysites: viewMySites, panelusers: viewPanelUsers };
 };

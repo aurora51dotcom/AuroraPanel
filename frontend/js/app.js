@@ -226,7 +226,7 @@
     packages: "packages", network: "network", firewall: "firewall", users: "users",
     mysql: "database", mysqlwiz: "wizard", pgsql: "database", pgwiz: "wizard",
     vhosts: "globe", redirects: "redirect", zones: "zone", dyndns: "refresh", ddnshosts: "refresh",
-    activity: "t_activity", isolation: "t_isolate", dockerapps: "t_docker", servers: "t_servers", alerts: "t_bell", schedbackups: "t_cloudup", updates: "t_update", autossl: "t_autossl",
+    activity: "t_activity", isolation: "t_isolate", dockerapps: "t_docker", servers: "t_servers", mysites: "globe", panelusers: "t_usergear", alerts: "t_bell", schedbackups: "t_cloudup", updates: "t_update", autossl: "t_autossl",
     visitors: "visitors", errors: "errors", bandwidth: "gauge", rawaccess: "rawlog", analytics: "chart", resources: "dashboard",
     ssh: "key", ipblocker: "ban", ssl: "lock", panelhttps: "lock", tokens: "token", hotlink: "link",
     leech: "trap", modsec: "shield", security: "phone", fixperms: "home", virus: "virus",
@@ -287,6 +287,18 @@
     Metrics: "metrics", Files: "folder", Advanced: "terminal", Software: "packages", Preferences: "gear",
   };
   let NAV_GROUPS = [];
+  function applyRole() {
+    document.body.dataset.role = state.role;
+    const lbl = $("#user-label");
+    if (lbl && state.role !== "admin" && !document.getElementById("role-pill")) {
+      lbl.after(el("span", { id: "role-pill", class: `pill ${state.role === "viewer" ? "warn" : "dim"}`, text: state.role === "viewer" ? "read-only" : "website manager" }));
+    }
+    if (state.role !== "site") return;
+    const nav = $("#nav");
+    nav.querySelectorAll(".nav-item").forEach((n) => { if (!SITE_VIEWS.has(n.dataset.view)) n.remove(); });
+    [...nav.querySelectorAll(".nav-group")].forEach((g) => { let n = g.nextElementSibling; if (!n || n.classList.contains("nav-group")) g.remove(); });
+    nav.prepend(el("div", { class: "nav-group", text: "My Websites" }), el("button", { class: "nav-item", "data-view": "mysites" }, [el("span", { class: "nav-ico", text: "🌐" }), " My Websites"]));
+  }
   function buildNavGroups() {
     NAV_GROUPS = [];
     let cur = null;
@@ -468,7 +480,7 @@
       // Already have creds — check for a live session.
       try {
         const me = await API.me();
-        return enterApp(me.username);
+        return enterApp(me.username, me);
       } catch (e) {
         return showAuth(false);
       }
@@ -533,11 +545,17 @@
     }
   });
 
-  function enterApp(username) {
+  // What a limited panel user may open (the server enforces it too — this only keeps the menus honest).
+  const SITE_VIEWS = new Set(["mysites", "files", "mailaccounts", "visitors", "analytics", "errors"]);
+  async function enterApp(username, me) {
     $("#auth-screen").hidden = true;
     $("#app-shell").hidden = false;
     $("#user-label").textContent = username;
-    state.meReady = API.me().then((m) => { state.sysUser = m.system_user; state.sysHome = m.home; }).catch(() => {});
+    if (!me) { try { me = await API.me(); } catch (e) { me = {}; } }
+    state.role = me.role || "admin";
+    state.sysUser = me.system_user; state.sysHome = me.home;
+    state.meReady = Promise.resolve();
+    applyRole();
     // Just switched the panel to HTTPS: reaching it over https:// is the proof
     // that stops the automatic revert to HTTP.
     if (location.protocol === "https:") {
@@ -588,7 +606,7 @@
     indexes: "Indexes", mime: "MIME Types", errorpages: "Error Pages", handlers: "Apache Handlers",
     virus: "Virus Scanner", dns: "Track DNS",
     ssh: "SSH Access", ipblocker: "IP Blocker & Trust", ssl: "SSL/TLS Certificates", tokens: "Manage API Tokens",
-    hotlink: "Hotlink Protection", redirects: "Redirects", modsec: "WAF Firewall", activity: "Activity Log", isolation: "Site Isolation", dockerapps: "Docker Apps", servers: "Servers", alerts: "Alerts", schedbackups: "Scheduled Backups", updates: "Updates", autossl: "AutoSSL", ddnshosts: "Dynamic DNS", visitors: "Visitors", errors: "Errors", bandwidth: "Bandwidth", rawaccess: "Raw Access", analytics: "Analytics", resources: "Resource Usage", leech: "Fail2ban",
+    hotlink: "Hotlink Protection", redirects: "Redirects", modsec: "WAF Firewall", activity: "Activity Log", isolation: "Site Isolation", dockerapps: "Docker Apps", servers: "Servers", mysites: "My Websites", panelusers: "Panel Users", alerts: "Alerts", schedbackups: "Scheduled Backups", updates: "Updates", autossl: "AutoSSL", ddnshosts: "Dynamic DNS", visitors: "Visitors", errors: "Errors", bandwidth: "Bandwidth", rawaccess: "Raw Access", analytics: "Analytics", resources: "Resource Usage", leech: "Fail2ban",
     fixperms: "Fix Home Permissions", vhosts: "Domains", dyndns: "Dynamic DNS Updater", zones: "Zone Editor",
     mysql: "Manage Databases", mysqlwiz: "MariaDB Wizard", pgsql: "PostgreSQL Databases",
     pgwiz: "PostgreSQL Wizard",
@@ -632,6 +650,7 @@
   // opts.arg: optional sub-page (#/view/arg)
   function navigate(view, opts = {}) {
     if (!TITLES[view] && view !== "dashboard") view = "dashboard";
+    if (state.role === "site" && !SITE_VIEWS.has(view)) view = "mysites";
     const mode = opts.history || "push";
     state.viewArg = opts.arg !== undefined ? opts.arg : (mode === "push" ? null : argFromHash());
     const hash = `#/${view}${state.viewArg ? "/" + argToUrl(state.viewArg) : ""}`;
@@ -979,7 +998,7 @@
       { label: "Account Preferences", icon: "services", view: "accountprefs" },
       { label: "Contact Information", icon: "phone", view: "contact" },
       { label: "Change Language", icon: "globe", view: "language" },
-      { label: "User Manager", icon: "users", view: "users" },
+      { label: "User Manager", icon: "users", view: "panelusers" },
     ]},
   ];
 
@@ -1588,6 +1607,7 @@
     fmState.cwd = fmState.cwd || "";
     $("#fm-up").addEventListener("click", () => { if (fmState.parent != null) fmLoad(fmState.parent); });
     state.refreshHandler = () => fmLoad(fmState.cwd);
+    if (typeof state.viewArg === "string" && state.viewArg.startsWith("/")) fmState.cwd = state.viewArg;  // opened at a folder (My Websites → Files)
     fmLoad(fmState.cwd);
   }
 
