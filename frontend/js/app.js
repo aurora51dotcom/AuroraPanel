@@ -8086,4 +8086,8 @@
 
   // ---- go ----
   boot();
+  // Installable as an app (needs https with a trusted certificate; plain http just skips this).
+  if ("serviceWorker" in navigator && window.isSecureContext) {
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
+  }
 })();

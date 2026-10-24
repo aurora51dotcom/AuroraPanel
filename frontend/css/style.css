@@ -2338,6 +2338,8 @@ label.op-rule { justify-content: flex-start; cursor: pointer; }
 .op-srv .toolbar { margin: auto 0 0; }
 .op-banrow { display: grid; grid-template-columns: 1.2fr 1.4fr auto; gap: 12px; align-items: end; }
 .op-steps { margin: 0; padding-left: 18px; display: grid; gap: 6px; font-size: 13px; }
+.op-banrow > .btn { padding-top: 11px; padding-bottom: 11px; font-size: inherit; }
+.op-steps + .op-banrow { margin-top: 14px; }
 .op-allsrv { margin-left: 4px; font-size: 12.5px; }
 @media (max-width: 800px) { .op-banrow { grid-template-columns: minmax(0, 1fr); } }
 .op-pwrow { display: flex; gap: 6px; align-items: center; }

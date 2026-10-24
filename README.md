@@ -12,6 +12,8 @@ there's nothing to compile on the Pi.
 To update, open **Preferences → About & Updates → Check for updates** in the panel (it only contacts
 aurora51.com when you click), or re-download the zip, unzip it over your install and re-run `sudo bash install.sh`.
 
+Guides for the bigger features are in [`docs/`](docs/README.md).
+
 **Feedback, bugs and ideas:** please share them in the
 [Raspberry Pi Forums thread](https://forums.raspberrypi.com/viewtopic.php?p=2388892).
 
@@ -19,21 +21,22 @@ aurora51.com when you click), or re-download the zip, unzip it over your install
 
 | Section | What it does |
 | ------- | ------------ |
-| **System** | Live dashboard (CPU, per-core load, temperature, throttling, memory, disks, uptime), `systemd` services, processes, `apt` packages, `ufw` firewall (with lock-out protection), Linux users. |
+| **System** | Live dashboard (CPU, per-core load, temperature, throttling, memory, disks, uptime), `systemd` services grouped by state, processes, `apt` packages, `ufw` firewall (with lock-out protection), Linux users. **Updates** (security fixes marked, one-click install, automatic security or full updates with an optional restart time). **Alerts** by email, Telegram or webhook (Discord, Slack, ntfy) for disk, memory, temperature, power, stopped services, expiring certificates, attack bursts, failed logins, failed backups, waiting updates and restarts. **Servers**: every AuroraPanel you run on one page, with pinned certificates and ban-everywhere. **Panel Users** with roles: administrator, read-only viewer and website manager. |
 | **Network** | VPN servers — **WireGuard** (QR codes), **OpenVPN** (per-user logins: certificate + password, password only or certificate only) and **IPsec/IKEv2** (native on iPhone/Mac/Windows) — each with an end-to-end self-test. Dynamic DNS (DuckDNS, No-IP, Dynu, deSEC, Cloudflare, FreeDNS, custom). Port Checker (outside probe, double-NAT/CGNAT detection, router instructions, UPnP). Network Monitor (who tried to connect). IP Blocker & Trust (ban IPs/ranges with expiry, trusted list). Fail2ban. Interfaces & Wi-Fi with confirm-or-revert. |
 | **Databases** | MariaDB and PostgreSQL databases and users, wizards, phpMyAdmin link. |
 | **Domains** | Apache virtual hosts (Force HTTPS, Let's Encrypt), folder sites at `http://<pi-ip>/<name>` (no domain needed), redirects, BIND zone editor, cPanel-style Dynamic DNS hosts (`home.example.com` follows a changing IP via a secret update URL or the DynDNS2 protocol most routers speak). |
 | **Email** | A full mail server in one click (Postfix, Dovecot 2.4, Rspamd, Redis): email accounts with quotas and sign-in / receive / send restrictions, forwarders and domain forwarders (with a “where does this go?” trace), default address (catch-all), email routing (local / backup / remote MX), autoresponders (schedule, HTML, %subject%/%from% tags), mailing lists (members-only, announcements, DMARC-safe), per-account and global filters (Sieve), spam filters (thresholds, Junk folder, auto-delete, allow/block lists, greylisting), track delivery (every message, spam score, reason), deliverability checks with one-click DNS records (MX, SPF, DKIM, DMARC, PTR), DKIM signing, address importer (CSV), TLS (Let's Encrypt), mail queue, disk usage, webmail (Roundcube), calendars & contacts with sharing (CalDAV/CardDAV), and one-tap iPhone/Mac setup profiles. |
-| **Security** | fail2ban jails (SSH, panel, OpenVPN, FTP, Apache, Nginx, MariaDB, port scans, repeat offenders), SSH keys, SSL/TLS, WAF Firewall (ModSecurity + OWASP Core Rule Set: blocking or detect-only, rule levels, app exclusions, trusted IPs, per-site off switch, recent attacks with one-click “allow this rule” and ban), hotlink protection, API tokens, TOTP two-factor login, panel HTTPS. |
+| **Security** | fail2ban jails (SSH, panel, OpenVPN, FTP, Apache, Nginx, MariaDB, port scans, repeat offenders), SSH keys, SSL/TLS, **AutoSSL** (Let's Encrypt for every site and the mail host, wildcards through the built-in DNS), **Site Isolation** (each site as its own user with its own PHP-FPM pool), **Activity Log** (who changed what, from where), an IP card for any address (owner, what it did here, ban / trust / report abuse), WAF Firewall (ModSecurity + OWASP Core Rule Set: blocking or detect-only, rule levels, app exclusions, trusted IPs, per-site off switch, recent attacks with one-click “allow this rule” and ban), hotlink protection, API tokens, TOTP two-factor login, panel HTTPS. |
 | **Metrics** | Visitors (every request, searchable, sortable, column picker, bot filter, live mode, CSV export, ban an IP in one click), Errors from Apache, PHP, mail, database, DNS and the system — sorted into categories with repeats grouped and a hint for each, Bandwidth (HTTP, IMAP, POP3, SMTP, FTP and all interface traffic; 24 h / week / year, per site per month), Raw Access (download logs as-is or gzipped, retention), Analytics (AWStats-style: visitors, visits, pages, referrers, search engines, browsers, devices, 404s, robots — no tracking script) and Resource Usage (CPU, memory, disk I/O, network, load, temperature, out-of-memory and under-voltage events, kept for a year). |
-| **Files** | File manager (upload, edit, zip, recycle bin), Images (thumbnails, resize, WebP), Directory Privacy (password-protected folders), Disk & Inodes usage, Web Disk (WebDAV), FTP accounts (locked to a folder; full / read-only / upload-only), Backups (folders, single databases, upload & import `.sql` dumps, categories, live progress bars, several restores at once) + Backup Wizard (files and databases, selective restore), Git Version Control (clone, pull, deploy, deploy keys). |
+| **Files** | File manager (upload, edit, zip, recycle bin), Images (thumbnails, resize, WebP), Directory Privacy (password-protected folders), Disk & Inodes usage, Web Disk (WebDAV), FTP accounts (locked to a folder; full / read-only / upload-only), Backups (folders, single databases, upload & import `.sql` dumps, categories, live progress bars, several restores at once) + Backup Wizard (files and databases, selective restore), **Scheduled Backups** (hourly to monthly, AES-256 encrypted, to another disk, S3/R2/Wasabi, Backblaze B2, SFTP, WebDAV or any rclone remote, with retention), **Move from cPanel** (import a full cPanel backup: sites, databases and mailboxes keeping their passwords, mail, forwarders, DNS zones), Git Version Control (clone, pull, deploy, deploy keys). |
 | **Advanced** | Browser terminal, cron wizard, `.htaccess` tools, ClamAV virus scanner, DNS tracing. |
 | **Software** | One-click Apache / Nginx / Lighttpd / Caddy / PHP-FPM / MariaDB / vsftpd, each with a settings page, config editor (validated, auto-rollback) and logs; PHP settings and extensions; App Manager. |
-| **App Installer** | Softaculous-style catalog of 40+ web apps in 18 categories (WordPress, Joomla, Drupal, phpBB, MediaWiki, Nextcloud, Moodle, OpenCart, Roundcube, Matomo, Laravel, Symfony…). Pick an app, choose Local / IP / domain / subdomain / existing site / any folder, and it downloads the latest release (checksum-verified where published), creates the database and — for apps with a command-line installer — sets up the admin account too, with a live progress bar. |
+| **App Installer** | Softaculous-style catalog of 40+ web apps in 18 categories (WordPress, Joomla, Drupal, phpBB, MediaWiki, Nextcloud, Moodle, OpenCart, Roundcube, Matomo, Laravel, Symfony…). Pick an app, choose Local / IP / domain / subdomain / existing site / any folder, and it downloads the latest release (checksum-verified where published), creates the database and — for apps with a command-line installer — sets up the admin account too, with a live progress bar. **WordPress Toolkit**: updates, hacked-file scan against wordpress.org checksums, hardening, auto-updates, maintenance mode and private staging copies. **Docker Apps**: Home Assistant, Jellyfin, Vaultwarden, Uptime Kuma, Pi-hole, Gitea, n8n and more, private by default behind an HTTPS web address. |
 
-Auth is a single admin account (PBKDF2-hashed password, signed 8-hour session
-cookies), with optional TOTP 2FA. First launch walks you through creating the
-account. Most system actions require the panel to run as **root** (the systemd
+First launch walks you through creating the owner account (PBKDF2-hashed password, signed 8-hour
+session cookies, optional TOTP 2FA). More people can be added as administrators, read-only viewers
+or website managers who only see their own sites. The panel can be installed as an app from the
+browser (with a trusted certificate). Most system actions require the panel to run as **root** (the systemd
 unit does); features degrade gracefully where a tool (`ufw`, `systemctl`) is
 absent.
 
@@ -119,6 +122,8 @@ to re-run first-time setup.
   names are validated before being passed to `systemctl`.
 - Sessions are HttpOnly, SameSite=strict cookies signed with a per-install
   secret that rotates whenever the password changes.
+- Panel users get only what their role allows (deny by default), and every change is recorded in
+  the Activity Log.
 
 ## Testing
 

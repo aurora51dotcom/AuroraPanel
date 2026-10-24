@@ -700,7 +700,9 @@ window.AuroraOps = (ui) => {
       const out = el("div", {});
       const res = (r) => { out.innerHTML = ""; out.append(el("div", { class: "mx-list" }, [el("div", { class: "mx-list-row" }, [el("b", { class: "grow", text: "This server" }), pill(r.local.ok ? "done" : r.local.error, r.local.ok ? "good" : "warn")]),
         ...Object.entries(r.servers).map(([n, x]) => el("div", { class: "mx-list-row" }, [el("b", { class: "grow", text: n }), pill(x.ok ? "done" : x.error, x.ok ? "good" : "bad")]))])); };
-      body.append(card("Ban or unban everywhere", [el("p", { class: "muted", text: `One click blocks an address on this server and on ${d.servers.length - 1} other${d.servers.length === 2 ? "" : "s"} — websites, mail, SSH, VPN, panels.` }),
+      body.append(card("Ban or unban everywhere", [el("p", { class: "muted", text: d.servers.length > 1
+        ? `One click blocks an address on this server and on ${d.servers.length - 1} other${d.servers.length === 2 ? "" : "s"} — websites, mail, SSH, VPN, panels.`
+        : "Blocks an address on this server — websites, mail, SSH, VPN, the panel. Add your other servers above and it reaches them too." }),
         el("div", { class: "op-banrow" }, [field("Address or range", ip), field("Reason", reason), field("For", durSel)]),
         el("div", { class: "toolbar" }, [btn("Ban everywhere", () => call(() => API.serversBan({ ip: ip.value.trim(), reason: reason.value.trim(), duration: +durSel.value || null }), "", res), "btn-danger"),
           btn("Unban everywhere", () => call(() => API.serversBan({ ip: ip.value.trim(), unban: true }), "", res), "btn-ghost")]), out]));

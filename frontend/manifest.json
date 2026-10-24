@@ -1,0 +1,16 @@
+{
+  "name": "AuroraPanel",
+  "short_name": "AuroraPanel",
+  "description": "Control panel for your server: websites, email, DNS, security and backups.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0b0a0a",
+  "theme_color": "#0b0a0a",
+  "icons": [
+    { "src": "/img/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/img/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/img/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "/img/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
