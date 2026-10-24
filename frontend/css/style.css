@@ -2310,3 +2310,33 @@ label.op-rule { justify-content: flex-start; cursor: pointer; }
 .op-cat { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
 .op-capp-d { font-size: 12.5px; color: var(--text-dim); line-height: 1.45; flex: 1; }
 .op-catbar { margin-bottom: 12px; }
+
+/* Servers */
+.op-srvs { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 14px; margin-bottom: 16px; }
+.op-srv { display: flex; flex-direction: column; gap: 12px; margin: 0; }
+#view-root .op-srvs > .card { margin-top: 0; }
+.op-srv.bad { border-color: rgba(255,107,107,.35); }
+.op-srv-h { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.op-srv-h .grow { min-width: 0; }
+.op-srv-h p { margin: 2px 0 0; }
+.op-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; background: var(--text-faint); }
+.op-dot.good { background: var(--good); box-shadow: 0 0 0 4px rgba(63,208,143,.15); }
+.op-dot.warn { background: var(--warn); box-shadow: 0 0 0 4px rgba(255,179,71,.15); }
+.op-dot.bad { background: var(--bad); box-shadow: 0 0 0 4px rgba(255,107,107,.15); }
+.op-srv-m { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.op-meter { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.op-meter-l { display: flex; justify-content: space-between; font-size: 12px; color: var(--text-dim); }
+.op-meter-l b { color: var(--text); }
+.op-meter-bar { height: 6px; border-radius: 6px; background: rgba(127,127,127,.15); overflow: hidden; }
+.op-meter-bar span { display: block; height: 100%; border-radius: 6px; background: var(--good); }
+.op-meter-bar.warn span { background: var(--warn); }
+.op-meter-bar.bad span { background: var(--bad); }
+.op-meter small { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.op-srv-f { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 12.5px; }
+.op-srv-al { display: grid; gap: 4px; }
+.op-srv-al > div { display: flex; align-items: center; gap: 8px; font-size: 12.5px; min-width: 0; }
+.op-srv .toolbar { margin: auto 0 0; }
+.op-banrow { display: grid; grid-template-columns: 1.2fr 1.4fr auto; gap: 12px; align-items: end; }
+.op-steps { margin: 0; padding-left: 18px; display: grid; gap: 6px; font-size: 13px; }
+.op-allsrv { margin-left: 4px; font-size: 12.5px; }
+@media (max-width: 800px) { .op-banrow { grid-template-columns: minmax(0, 1fr); } }

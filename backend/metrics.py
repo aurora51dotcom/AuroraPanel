@@ -1272,4 +1272,9 @@ def ip_info(ip: str, days: int = 7) -> dict:
         out["reported"] = abuse.reported().get(ip)
     except Exception:
         out["logins_failed"], out["reported"] = 0, None
+    try:
+        from . import servers
+        out["servers"] = servers.count()
+    except Exception:
+        out["servers"] = 0
     return out

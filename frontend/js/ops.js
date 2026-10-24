@@ -647,6 +647,78 @@ window.AuroraOps = (ui) => {
     load();
   }
 
+  // ======================================================================
+  //  System → Servers (every AuroraPanel on one page)
+  // ======================================================================
+  const meter = (label, pct, sub) => el("div", { class: "op-meter" }, [el("div", { class: "op-meter-l" }, [el("span", { text: label }), el("b", { text: pct == null ? "—" : `${Math.round(pct)}%` })]),
+    el("div", { class: `op-meter-bar ${pct >= 90 ? "bad" : pct >= 75 ? "warn" : ""}` }, el("span", { style: `width:${Math.max(2, Math.min(100, pct || 0))}%` })), sub ? el("small", { class: "muted", text: sub }) : null]);
+  const upt = (s) => !s ? "—" : s < 3600 ? `${Math.round(s / 60)} min` : s < 86400 ? `${Math.round(s / 3600)} h` : `${Math.round(s / 86400)} days`;
+  async function viewServers(root) {
+    root.append(pageHead("Servers", "All your AuroraPanel servers on one page — Raspberry Pis at home, VPSs in the cloud. See which one needs attention, and act on all of them at once.",
+      [btn("Add a server", () => addDlg(), "btn-primary")]));
+    const body = el("div", {}, el("div", { class: "loading", text: "Asking every server…" }));
+    root.append(body);
+    let d;
+    async function load() {
+      try { d = await API.servers(); } catch (e) { body.innerHTML = ""; body.append(el("p", { class: "empty", text: e.message })); return; }
+      draw();
+    }
+    function draw() {
+      body.innerHTML = "";
+      const bad = d.servers.filter((s) => !s.ok || (s.alerts || []).some((a) => a.level === "critical") || (s.failed_units || []).length).length;
+      body.append(el("div", { class: "mx-tiles" }, [
+        tile("Servers", String(d.servers.length), d.servers.length > 1 ? `${d.servers.filter((s) => s.ok).length} reachable` : "add your others", "server"),
+        tile("Need attention", String(bad), bad ? "critical alerts, failed services or unreachable" : "everything is healthy", "warning", bad ? "warnt" : ""),
+        tile("Security updates", String(d.servers.reduce((a, s) => a + ((s.updates || {}).security || 0), 0)), "waiting across all servers", "t_update"),
+        tile("Banned addresses", String(d.servers.reduce((a, s) => a + (s.bans || 0), 0)), "manual + fail2ban, all servers", "ban"),
+      ]));
+      body.append(el("div", { class: "op-srvs" }, d.servers.map((s) => el("div", { class: `card op-srv ${s.ok ? "" : "bad"}` }, [
+        el("div", { class: "op-srv-h" }, [el("span", { class: `op-dot ${s.ok ? ((s.alerts || []).some((a) => a.level === "critical") || (s.failed_units || []).length ? "warn" : "good") : "bad"}` }),
+          el("div", { class: "grow" }, [el("b", { text: s.name + (s.local ? "" : "") }), el("p", { class: "muted mx-small mx-ell", text: [s.hostname, s.model || (s.pi ? "Raspberry Pi" : ""), s.version ? `v${s.version}` : ""].filter(Boolean).join(" · ") })]),
+          s.local ? pill("this one", "good") : null]),
+        s.ok ? el("div", { class: "op-srv-m" }, [meter("CPU", s.cpu, `${s.cpus || "?"} cores · load ${s.load != null ? s.load.toFixed(2) : "—"}${s.temp ? ` · ${s.temp}°C` : ""}`),
+          meter("Memory", s.mem_pct, s.mem_total ? fmtBytes(s.mem_total) : ""), meter("Disk", s.disk_pct, s.disk_total ? fmtBytes(s.disk_total) : "")])
+          : el("div", { class: "mx-note" }, [icon("warning", 16), el("span", { text: s.error || "Unreachable" })]),
+        s.ok ? el("div", { class: "op-srv-f" }, [
+          el("span", { text: `Up ${upt(s.uptime)}` }),
+          (s.updates || {}).total ? pill(`${s.updates.total} updates${s.updates.security ? ` · ${s.updates.security} security` : ""}`, s.updates.security ? "bad" : "warn") : pill("up to date", "good"),
+          (s.updates || {}).reboot ? pill("restart needed", "warn") : null,
+          (s.failed_units || []).length ? pill(`${s.failed_units.length} failed service${s.failed_units.length > 1 ? "s" : ""}`, "bad") : null,
+          s.bans ? el("span", { class: "muted", text: `${s.bans} banned` }) : null]) : null,
+        (s.alerts || []).length ? el("div", { class: "op-srv-al" }, s.alerts.slice(0, 3).map((a) => el("div", {}, [pill(a.level, a.level === "critical" ? "bad" : a.level === "warning" ? "warn" : "dim"), el("span", { class: "mx-ell", text: a.title })]))) : null,
+        el("div", { class: "toolbar" }, [
+          s.local ? null : el("a", { class: "btn btn-sm btn-ghost", href: s.url, target: "_blank", rel: "noopener", text: "Open its panel ↗" }),
+          !s.local && s.error && /certificate changed/.test(s.error) ? armed("Trust its new certificate", "Click again", () => call(() => API.serverRepin(s.id), "Certificate accepted", load), "btn-ghost") : null,
+          s.local ? null : armed("Remove", "Click again", () => call(() => API.serverRemove(s.id), "Removed", load), "btn-ghost"),
+        ]),
+      ]))));
+      // ban everywhere
+      const ip = el("input", { type: "text", placeholder: "203.0.113.7 or 203.0.113.0/24" });
+      const reason = el("input", { type: "text", placeholder: "e.g. SSH brute force" });
+      const durSel = el("select", { class: "em-select mx-narrow" }, [[3600, "1 hour"], [86400, "24 hours"], [604800, "7 days"], [2592000, "30 days"], [0, "Forever"]].map(([v, l]) => el("option", { value: v, text: l })));
+      durSel.value = "86400";
+      const out = el("div", {});
+      const res = (r) => { out.innerHTML = ""; out.append(el("div", { class: "mx-list" }, [el("div", { class: "mx-list-row" }, [el("b", { class: "grow", text: "This server" }), pill(r.local.ok ? "done" : r.local.error, r.local.ok ? "good" : "warn")]),
+        ...Object.entries(r.servers).map(([n, x]) => el("div", { class: "mx-list-row" }, [el("b", { class: "grow", text: n }), pill(x.ok ? "done" : x.error, x.ok ? "good" : "bad")]))])); };
+      body.append(card("Ban or unban everywhere", [el("p", { class: "muted", text: `One click blocks an address on this server and on ${d.servers.length - 1} other${d.servers.length === 2 ? "" : "s"} — websites, mail, SSH, VPN, panels.` }),
+        el("div", { class: "op-banrow" }, [field("Address or range", ip), field("Reason", reason), field("For", durSel)]),
+        el("div", { class: "toolbar" }, [btn("Ban everywhere", () => call(() => API.serversBan({ ip: ip.value.trim(), reason: reason.value.trim(), duration: +durSel.value || null }), "", res), "btn-danger"),
+          btn("Unban everywhere", () => call(() => API.serversBan({ ip: ip.value.trim(), unban: true }), "", res), "btn-ghost")]), out]));
+    }
+    function addDlg() {
+      const name = el("input", { type: "text", placeholder: "Home Pi" });
+      const url = el("input", { type: "text", placeholder: "https://192.168.0.100:8088" });
+      const token = el("input", { type: "password", placeholder: "aur_…", autocomplete: "off" });
+      openModal("Add a server", el("div", { class: "em-form" }, [
+        el("ol", { class: "op-steps" }, [el("li", { text: "On the other server's panel: Security → Manage API Tokens → create a token (name it after this server)." }),
+          el("li", { text: "Copy it and paste it below with that panel's address (the one you open it with)." })]),
+        field("Name", name), field("Panel address", url, "https:// with any certificate — it's remembered (pinned) on first contact. http:// only on your own network."), field("API token", token),
+      ]), [el("button", { class: "btn btn-primary", text: "Add", onclick: () => call(() => API.serverAdd({ name: name.value.trim(), url: url.value.trim(), token: token.value.trim() }), "Server added", () => { closeModal(); load(); }) })]);
+    }
+    load();
+    const t = setInterval(load, 60000); state.cleanups.push(() => clearInterval(t));
+  }
+
   return { activity: viewActivity, alerts: viewAlerts, schedbackups: viewSchedBackups, updates: viewUpdates, autossl: viewAutoSSL, isolation: viewIsolation,
-    dockerapps: viewDockerApps };
+    dockerapps: viewDockerApps, servers: viewServers };
 };

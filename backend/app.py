@@ -25,7 +25,7 @@ from starlette.middleware.gzip import GZipMiddleware
 from pydantic import BaseModel
 
 from . import (
-    abuse, alerts, antivirus, audit, autossl, dockerapps, isolate, schedules, tasks, updates, apache, apitokens, appmanager, auth, backups, config, cron,
+    abuse, alerts, antivirus, audit, autossl, dockerapps, isolate, servers, schedules, tasks, updates, apache, apitokens, appmanager, auth, backups, config, cron,
     apps, databases, diskusage, dnszones, domains, fail2ban, netmgr, sites, files, firewall, ipblocker, jobs,
     metrics, modsecurity, netdiag, waf, packages, perms, phpmgr, services, sslcerts, sshaccess,
     sysapps, system_info, terminal, twofa, users,
@@ -3570,6 +3570,68 @@ class RebootBody(BaseModel):
 @app.post("/api/updates/reboot")
 def api_upd_reboot(body: RebootBody, user: str = auth.CurrentUser):
     return _upd_call(lambda: updates.cancel_reboot() if body.cancel else updates.reboot(body.minutes))
+
+
+# --------------------------------------------------------------------------- #
+# Servers (other AuroraPanels)
+# --------------------------------------------------------------------------- #
+def _srv_call(fn):
+    try:
+        return fn()
+    except (servers.ServerError, guard.GuardError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/api/fleet/self")
+def api_fleet_self(user: str = auth.CurrentUser):
+    return servers.self_summary()
+
+
+@app.get("/api/servers")
+def api_servers(user: str = auth.CurrentUser):
+    return servers.overview()
+
+
+class ServerAddBody(BaseModel):
+    name: str = ""
+    url: str
+    token: str
+
+
+@app.post("/api/servers")
+def api_servers_add(body: ServerAddBody, user: str = auth.CurrentUser):
+    return _srv_call(lambda: servers.add(body.name, body.url, body.token))
+
+
+@app.delete("/api/servers/{sid}")
+def api_servers_del(sid: str, user: str = auth.CurrentUser):
+    return _srv_call(lambda: servers.remove(sid))
+
+
+@app.post("/api/servers/{sid}/repin")
+def api_servers_repin(sid: str, user: str = auth.CurrentUser):
+    return _srv_call(lambda: servers.repin(sid))
+
+
+class FleetBanBody(BaseModel):
+    ip: str
+    reason: str = ""
+    duration: int | None = None
+    unban: bool = False
+
+
+@app.post("/api/servers/ban")
+def api_servers_ban(body: FleetBanBody, request: Request, user: str = auth.CurrentUser):
+    """Ban (or unban) on this server and every added server."""
+    def go():
+        try:  # already banned/unbanned here must not stop the others
+            local = guard.unban(body.ip) if body.unban else guard.ban(body.ip, body.reason, body.duration, _client_ip(request), "Servers · ban everywhere")
+            local = {"ok": True}
+        except guard.GuardError as exc:
+            local = {"ok": False, "error": str(exc)}
+        others = servers.unban_everywhere(body.ip) if body.unban else servers.ban_everywhere(body.ip, body.reason, body.duration)
+        return {"local": local, "servers": others}
+    return _srv_call(go)
 
 
 # --------------------------------------------------------------------------- #

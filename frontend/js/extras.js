@@ -238,16 +238,21 @@ window.AuroraExtras = (ui) => {
       // actions
       foot.innerHTML = "";
       const act = async (fn, ok) => { if (await call(fn, ok)) { await load(); if (onChange) onChange(); } };
-      if (st.status === "banned") foot.append(btn("Unban", () => act(() => API.guardUnban(st.kind === "manual" && st.cidr ? st.cidr : ip), `${ip} unbanned`), "btn-primary"));
+      const allSrv = d.servers ? el("label", { class: "dm-check op-allsrv" }, [el("input", { type: "checkbox" }), el("span", { text: `also on my ${d.servers} other server${d.servers > 1 ? "s" : ""}` })]) : null;
+      const everywhere = () => allSrv && allSrv.querySelector("input").checked;
+      if (st.status === "banned") foot.append(btn("Unban", () => act(() => everywhere() ? API.serversBan({ ip: st.kind === "manual" && st.cidr ? st.cidr : ip, unban: true })
+        : API.guardUnban(st.kind === "manual" && st.cidr ? st.cidr : ip), `${ip} unbanned`), "btn-primary"));
       else if (st.status !== "trusted") {
         const dsel = el("select", { class: "em-select mx-narrow" }, DURATIONS.map(([v, l]) => el("option", { value: v, text: l })));
         dsel.value = "86400";
-        foot.append(el("div", { class: "mx-ban" }, [dsel, btn("Ban", () => act(() => API.guardBan(ip, `${w.hits} requests, ${d.waf.events} WAF events, ${d.logins_failed} failed logins`, +dsel.value || null, `IP card · ${document.title.split(" · ")[0]}`), `${ip} banned`), "btn-danger")]));
+        foot.append(el("div", { class: "mx-ban" }, [dsel, btn("Ban", () => act(() => everywhere() ? API.serversBan({ ip, reason: `${w.hits} requests, ${d.waf.events} WAF events, ${d.logins_failed} failed logins`, duration: +dsel.value || null })
+          : API.guardBan(ip, `${w.hits} requests, ${d.waf.events} WAF events, ${d.logins_failed} failed logins`, +dsel.value || null, `IP card · ${document.title.split(" · ")[0]}`), `${ip} banned`), "btn-danger")]));
       }
       if (st.status === "trusted") foot.append(btn("Remove from trusted", () => act(() => API.guardUntrust(st.cidr || ip), `${ip} no longer trusted`), "btn-ghost"));
       else if (st.status !== "banned") foot.append(btn("Trust", () => act(() => API.guardTrust(ip, "Trusted from the IP card"), `${ip} trusted — it will never be banned`), "btn-ghost"));
       if (!d.private) foot.append(btn(d.reported ? "Reported · read / send again" : "Report abuse", () => reportIp(ip, () => load()), d.reported ? "btn-ghost" : "btn-ghost"));
       foot.append(btn("Copy IP", async () => toast(await copyText(ip) ? "Copied" : "Copy failed", "good"), "btn-ghost"));
+      if (allSrv && st.status !== "trusted") foot.append(allSrv);
     }
     load();
   }
