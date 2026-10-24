@@ -61,7 +61,26 @@ def _enable(*units: str) -> list[str]:
     return out
 
 
+PHP_NOJIT = ("; Written by AuroraPanel. PHP's regex JIT can't get executable memory under Apache on some systems\n"
+             "; (\"Allocation of JIT memory failed\" in the error log); without it regexes work the same, slightly slower.\n"
+             "pcre.jit=0\n")
+
+
+def php_no_jit() -> bool:
+    """Turn PHP's PCRE JIT off for Apache's PHP when it fails there (Ubuntu 26.04 + PHP 8.5 does)."""
+    changed = False
+    for d in Path("/etc/php").glob("*/apache2/conf.d"):
+        f = d / "99-aurora-pcre.ini"
+        if not f.exists() or f.read_text() != PHP_NOJIT:
+            f.write_text(PHP_NOJIT)
+            changed = True
+    if changed and _run(["apache2ctl", "configtest"]).returncode == 0:
+        _run(["systemctl", "reload", "apache2"])
+    return changed
+
+
 def _post_web() -> list[str]:
+    php_no_jit()
     out = []
     mods = ["rewrite", "headers", "expires", "ssl", "deflate"]
     r = _run(["a2enmod", "-q", *mods])
@@ -78,6 +97,18 @@ def _post_web() -> list[str]:
 def _mail():
     from . import mail
     return mail
+
+
+def _waf():
+    from . import waf
+    return waf
+
+
+def _waf_setup() -> list[str]:
+    try:
+        return _waf().setup()
+    except _waf().WafError as e:
+        return [f"! {e}"]
 
 
 def _collect(fn) -> list[str]:
@@ -171,11 +202,12 @@ COMPONENTS: dict[str, dict] = {
         "check": lambda: shutil.which("clamscan", path=PATH) is not None,
     },
     "modsecurity": {
-        "name": "ModSecurity", "icon": "shield", "size": "about 5 MB",
-        "desc": "A web application firewall for Apache that blocks common attacks.",
-        "pkgs": ["libapache2-mod-security2"],
+        "name": "WAF Firewall", "icon": "shield", "size": "about 6 MB",
+        "desc": "ModSecurity with the OWASP Core Rule Set: blocks SQL injection, XSS, path traversal, scanners and other web attacks before they reach your sites.",
+        "pkgs": ["libapache2-mod-security2", "modsecurity-crs"],
         "needs": ["web"],
-        "check": lambda: Path("/etc/apache2/mods-available/security2.load").exists(),
+        "check": lambda: _waf().installed(),
+        "post": lambda: _waf_setup(),
     },
     "ddclient": {
         "name": "ddclient", "icon": "refresh", "size": "about 1 MB",

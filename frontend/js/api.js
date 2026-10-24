@@ -472,5 +472,28 @@ const API = (() => {
     avStatus: () => request("GET", "/api/antivirus/status"),
     avScan: (path, recursive) => request("POST", "/api/antivirus/scan", { path, recursive }),
     avUpdate: () => request("POST", "/api/antivirus/update"),
+    // WAF firewall
+    waf: () => request("GET", "/api/waf"),
+    wafSave: (data) => request("POST", "/api/waf", data),
+    wafEvents: (hours, ip) => request("GET", `/api/waf/events?hours=${hours || 24}${ip ? "&ip=" + encodeURIComponent(ip) : ""}`),
+    wafAllow: (id, msg) => request("POST", "/api/waf/allow-rule", { id, msg }),
+    wafRestore: (id) => request("POST", "/api/waf/restore-rule", { id }),
+    wafTest: () => request("POST", "/api/waf/test"),
+    // Dynamic DNS hosts (Domains)
+    ddnsHosts: () => request("GET", "/api/ddns-hosts"),
+    ddnsHostCreate: (data) => request("POST", "/api/ddns-hosts", data),
+    ddnsHostEdit: (id, data) => request("POST", `/api/ddns-hosts/${encodeURIComponent(id)}`, data),
+    ddnsHostKey: (id) => request("GET", `/api/ddns-hosts/${encodeURIComponent(id)}/key`),
+    ddnsHostRegen: (id) => request("POST", `/api/ddns-hosts/${encodeURIComponent(id)}/regenerate`),
+    ddnsHostDelete: (id) => request("DELETE", `/api/ddns-hosts/${encodeURIComponent(id)}`),
+    // Metrics
+    metSites: () => request("GET", "/api/metrics/sites"),
+    metVisitors: (site, limit, hours, name) => request("GET", `/api/metrics/visitors?site=${encodeURIComponent(site)}&limit=${limit || 1000}&hours=${hours || 0}${name ? "&name=" + encodeURIComponent(name) : ""}`),
+    metErrors: (site, hours, sources) => request("GET", `/api/metrics/errors?site=${encodeURIComponent(site || "")}&hours=${hours || 24}${sources ? "&sources=" + encodeURIComponent(sources) : ""}`),
+    metBandwidth: () => request("GET", "/api/metrics/bandwidth"),
+    metResources: (span) => request("GET", `/api/metrics/resources?span=${encodeURIComponent(span || "day")}`),
+    metAnalytics: (site, days, file, name) => request("GET", `/api/metrics/analytics?site=${encodeURIComponent(site)}&days=${days || 30}${file ? "&file=" + encodeURIComponent(file) : ""}${name ? "&name=" + encodeURIComponent(name) : ""}`),
+    metRaw: () => request("GET", "/api/metrics/raw"),
+    metRetention: (days) => request("POST", "/api/metrics/retention", { days }),
   };
 })();

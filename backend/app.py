@@ -27,9 +27,9 @@ from pydantic import BaseModel
 from . import (
     abuse, antivirus, apache, apitokens, appmanager, auth, backups, config, cron,
     apps, databases, diskusage, dnszones, domains, fail2ban, netmgr, sites, files, firewall, ipblocker, jobs,
-    modsecurity, netdiag, packages, perms, phpmgr, services, sslcerts, sshaccess,
+    metrics, modsecurity, netdiag, waf, packages, perms, phpmgr, services, sslcerts, sshaccess,
     sysapps, system_info, terminal, twofa, users,
-    appconfig, ddns, ftp, gitvc, guard, images, ipsec, webaccess, netmon, openvpn, mail, panelhttps, phpsettings, portcheck, requires, version, vpncommon, wireguard,
+    appconfig, ddns, ddnshosts, ftp, gitvc, guard, images, ipsec, webaccess, netmon, openvpn, mail, panelhttps, phpsettings, portcheck, requires, version, vpncommon, wireguard,
 )
 
 # The API schema is a full map of every endpoint, so it's off unless asked for.
@@ -1482,6 +1482,60 @@ def api_modsec_toggle(body: EnableBody, user: str = auth.CurrentUser):
 @app.post("/api/modsecurity/install")
 def api_modsec_install(user: str = auth.CurrentUser):
     return {"job": modsecurity.install().id}
+
+
+# --------------------------------------------------------------------------- #
+# Security: WAF Firewall (ModSecurity + OWASP CRS)
+# --------------------------------------------------------------------------- #
+def _waf_call(fn):
+    try:
+        return fn()
+    except waf.WafError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+class WafBody(BaseModel):
+    mode: str | None = None
+    paranoia: int | None = None
+    threshold: int | None = None
+    apps: list[str] | None = None
+    trusted: list[str] | None = None
+    sites_off: list[str] | None = None
+
+
+class WafRuleBody(BaseModel):
+    id: str
+    msg: str = ""
+
+
+@app.get("/api/waf")
+def api_waf(user: str = auth.CurrentUser):
+    return waf.status()
+
+
+@app.post("/api/waf")
+def api_waf_update(body: WafBody, user: str = auth.CurrentUser):
+    return _waf_call(lambda: waf.update(body.model_dump(exclude_none=True)))
+
+
+@app.get("/api/waf/events")
+def api_waf_events(hours: int = 24, ip: str = "", user: str = auth.CurrentUser):
+    return {"events": waf.events(hours=max(1, min(hours, 24 * 30)), limit=500, ip=ip)}
+
+
+@app.post("/api/waf/allow-rule")
+def api_waf_allow(body: WafRuleBody, user: str = auth.CurrentUser):
+    return _waf_call(lambda: waf.allow_rule(body.id, body.msg))
+
+
+@app.post("/api/waf/restore-rule")
+def api_waf_restore(body: WafRuleBody, user: str = auth.CurrentUser):
+    return _waf_call(lambda: waf.restore_rule(body.id))
+
+
+@app.post("/api/waf/test")
+def api_waf_test(user: str = auth.CurrentUser):
+    return _waf_call(waf.test)
 
 
 # --------------------------------------------------------------------------- #
@@ -3332,6 +3386,182 @@ def api_account_rename(body: RenameBody, user: str = auth.CurrentUser):
         raise HTTPException(status_code=400, detail="Username required")
     config.rename_user(body.username.strip())
     return {"ok": True, "username": body.username.strip()}
+
+
+# --------------------------------------------------------------------------- #
+# Metrics: Visitors, Errors, Bandwidth, Raw Access, Analytics, Resource Usage
+# --------------------------------------------------------------------------- #
+def _met_call(fn):
+    try:
+        return fn()
+    except metrics.MetricsError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.on_event("startup")
+def _metrics_start():
+    metrics.start()
+
+
+@app.get("/api/metrics/sites")
+def api_met_sites(user: str = auth.CurrentUser):
+    return {"sites": metrics.sites()}
+
+
+@app.get("/api/metrics/visitors")
+def api_met_visitors(site: str, limit: int = 1000, hours: int = 0, name: str = "", user: str = auth.CurrentUser):
+    return _met_call(lambda: metrics.visitors(site, limit, hours, name))
+
+
+@app.get("/api/metrics/errors")
+def api_met_errors(site: str = "", hours: int = 24, sources: str = "web,mail,database,dns,php_fpm,panel,system",
+                   user: str = auth.CurrentUser):
+    return _met_call(lambda: metrics.errors(site, hours, sources))
+
+
+@app.get("/api/metrics/bandwidth")
+def api_met_bw(user: str = auth.CurrentUser):
+    return metrics.bandwidth()
+
+
+@app.get("/api/metrics/resources")
+def api_met_res(span: str = "day", user: str = auth.CurrentUser):
+    return metrics.resources(span)
+
+
+@app.get("/api/metrics/analytics")
+def api_met_analytics(site: str, days: int = 30, file: str = "", name: str = "", user: str = auth.CurrentUser):
+    return _met_call(lambda: metrics.analytics(site, days, file, name))
+
+
+@app.get("/api/metrics/raw")
+def api_met_raw(user: str = auth.CurrentUser):
+    return metrics.raw()
+
+
+class RetentionBody(BaseModel):
+    days: int
+
+
+@app.post("/api/metrics/retention")
+def api_met_retention(body: RetentionBody, user: str = auth.CurrentUser):
+    return _met_call(lambda: metrics.set_retention(body.days))
+
+
+@app.get("/api/metrics/download")
+def api_met_download(file: str, gz: bool = False, user: str = auth.CurrentUser):
+    p = _met_call(lambda: metrics.log_file(file))
+    if gz and not p.name.endswith(".gz"):
+        import gzip as _gz
+        def stream():
+            with open(p, "rb") as f:
+                buf = io.BytesIO()
+                z = _gz.GzipFile(fileobj=buf, mode="wb")
+                while True:
+                    chunk = f.read(1 << 20)
+                    if not chunk:
+                        break
+                    z.write(chunk)
+                    yield buf.getvalue(); buf.seek(0); buf.truncate()
+                z.close()
+                yield buf.getvalue()
+        return StreamingResponse(stream(), media_type="application/gzip",
+                                 headers={"Content-Disposition": f'attachment; filename="{p.name}.gz"'})
+    media = "application/gzip" if p.name.endswith(".gz") else "text/plain"
+    return FileResponse(str(p), media_type=media, filename=p.name)
+
+
+# --------------------------------------------------------------------------- #
+# Domains: Dynamic DNS hosts (and their public update URL)
+# --------------------------------------------------------------------------- #
+def _ddh_call(fn):
+    try:
+        return fn()
+    except (ddnshosts.DdnsError, dnszones.ZoneError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+class DdnsHostBody(BaseModel):
+    domain: str
+    prefix: str
+    ip: str = ""
+    description: str = ""
+
+
+class DdnsHostEdit(BaseModel):
+    description: str | None = None
+    ip: str | None = None
+
+
+@app.get("/api/ddns-hosts")
+def api_ddh(request: Request, user: str = auth.CurrentUser):
+    return {**ddnshosts.listing(), "your_ip": _caller_ip(request)}
+
+
+@app.post("/api/ddns-hosts")
+def api_ddh_create(body: DdnsHostBody, user: str = auth.CurrentUser):
+    return _ddh_call(lambda: ddnshosts.create(body.domain, body.prefix, body.ip, body.description))
+
+
+@app.post("/api/ddns-hosts/{hid}")
+def api_ddh_edit(hid: str, body: DdnsHostEdit, user: str = auth.CurrentUser):
+    def go():
+        if body.ip:
+            ddnshosts.set_ip(hid, body.ip)
+        return ddnshosts.update_meta(hid, body.description)
+    return _ddh_call(go)
+
+
+@app.get("/api/ddns-hosts/{hid}/key")
+def api_ddh_key(hid: str, user: str = auth.CurrentUser):
+    return _ddh_call(lambda: ddnshosts.reveal(hid))
+
+
+@app.post("/api/ddns-hosts/{hid}/regenerate")
+def api_ddh_regen(hid: str, user: str = auth.CurrentUser):
+    return _ddh_call(lambda: ddnshosts.regenerate(hid))
+
+
+@app.delete("/api/ddns-hosts/{hid}")
+def api_ddh_delete(hid: str, user: str = auth.CurrentUser):
+    return _ddh_call(lambda: ddnshosts.delete(hid))
+
+
+def _caller_ip(request: Request) -> str:
+    """The client's address; behind our own Apache proxy, the address Apache saw."""
+    ip = request.client.host if request.client else ""
+    if ip in ("127.0.0.1", "::1"):
+        fwd = request.headers.get("x-forwarded-for", "")
+        if fwd:
+            ip = fwd.split(",")[-1].strip()
+    return ip
+
+
+def _ddns_answer(text: str) -> Response:
+    return Response(text + "\n", media_type="text/plain", headers={"Cache-Control": "no-store"})
+
+
+@app.api_route("/ddns/update", methods=["GET", "POST"])
+def ddns_public_update(request: Request, key: str = "", ip: str = "", myip: str = ""):
+    """Public, no login: the secret key is the credential (?key=…, optional &ip=…)."""
+    return _ddns_answer(ddnshosts.remote_update(key, ip or myip, _caller_ip(request)))
+
+
+@app.get("/nic/update")
+def ddns_public_nic(request: Request, hostname: str = "", myip: str = ""):
+    """dyndns2 protocol for routers: Basic auth with user = hostname, password = key."""
+    import base64
+    key, user = "", ""
+    h = request.headers.get("authorization", "")
+    if h.lower().startswith("basic "):
+        try:
+            user, _, key = base64.b64decode(h[6:]).decode("utf-8", "replace").partition(":")
+        except ValueError:
+            pass
+    if not key:
+        return Response("badauth\n", status_code=401, media_type="text/plain",
+                        headers={"WWW-Authenticate": 'Basic realm="AuroraPanel Dynamic DNS"'})
+    return _ddns_answer(ddnshosts.remote_update(key, myip.split(",")[0], _caller_ip(request), hostname or user))
 
 
 # --------------------------------------------------------------------------- #

@@ -61,6 +61,17 @@
   //  SVG line icons (Lucide-style)
   // ======================================================================
   const ICONS = {
+    chart: '<path d="M3 3v18h18"/><polyline points="7 15 11 10 14 13 20 6"/>',
+    check: '<polyline points="20 6 9 17 4 12"/>',
+    clock: '<circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/>',
+    login: '<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/>',
+    plus: '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
+    server: '<rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><line x1="7" y1="7.5" x2="7.01" y2="7.5"/><line x1="7" y1="16.5" x2="7.01" y2="16.5"/>',
+    warning: '<path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
+    visitors: '<circle cx="9" cy="8" r="4"/><path d="M2 21v-1a6 6 0 0 1 9.5-4.9"/><polyline points="14 20 17 16 19 18 22 13"/>',
+    errors: '<polygon points="7.9 2 16.1 2 22 7.9 22 16.1 16.1 22 7.9 22 2 16.1 2 7.9"/><line x1="12" y1="7" x2="12" y2="13"/><line x1="12" y1="16.5" x2="12.01" y2="16.5"/>',
+    gauge: '<path d="M4.9 19a9 9 0 1 1 14.2 0"/><line x1="12" y1="15" x2="16" y2="9"/><circle cx="12" cy="15" r="1.5"/>',
+    rawlog: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><polyline points="9 17 12 20 15 17"/>',
     dashboard: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/>',
     terminal: '<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>',
     services: '<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>',
@@ -158,9 +169,10 @@
     dashboard: "dashboard", terminal: "terminal", services: "services", processes: "processes",
     packages: "packages", network: "network", firewall: "firewall", users: "users",
     mysql: "database", mysqlwiz: "wizard", pgsql: "database", pgwiz: "wizard",
-    vhosts: "globe", redirects: "redirect", zones: "zone", dyndns: "refresh",
+    vhosts: "globe", redirects: "redirect", zones: "zone", dyndns: "refresh", ddnshosts: "refresh",
+    visitors: "visitors", errors: "errors", bandwidth: "gauge", rawaccess: "rawlog", analytics: "chart", resources: "dashboard",
     ssh: "key", ipblocker: "ban", ssl: "lock", panelhttps: "lock", tokens: "token", hotlink: "link",
-    leech: "trap", modsec: "brick", security: "phone", fixperms: "home", virus: "virus",
+    leech: "trap", modsec: "shield", security: "phone", fixperms: "home", virus: "virus",
     files: "folder", disk: "disk", backups: "backup", cron: "cron", indexes: "indexes",
     errorpages: "error", handlers: "handler", mime: "mime", dns: "dns",
     appmgr: "packages", sysapps: "services", phpver: "brick", password: "lock", accountprefs: "services",
@@ -519,8 +531,8 @@
     indexes: "Indexes", mime: "MIME Types", errorpages: "Error Pages", handlers: "Apache Handlers",
     virus: "Virus Scanner", dns: "Track DNS",
     ssh: "SSH Access", ipblocker: "IP Blocker & Trust", ssl: "SSL/TLS Certificates", tokens: "Manage API Tokens",
-    hotlink: "Hotlink Protection", redirects: "Redirects", modsec: "ModSecurity", leech: "Fail2ban",
-    fixperms: "Fix Home Permissions", vhosts: "Domains", dyndns: "Dynamic DNS", zones: "Zone Editor",
+    hotlink: "Hotlink Protection", redirects: "Redirects", modsec: "WAF Firewall", ddnshosts: "Dynamic DNS", visitors: "Visitors", errors: "Errors", bandwidth: "Bandwidth", rawaccess: "Raw Access", analytics: "Analytics", resources: "Resource Usage", leech: "Fail2ban",
+    fixperms: "Fix Home Permissions", vhosts: "Domains", dyndns: "Dynamic DNS Updater", zones: "Zone Editor",
     mysql: "Manage Databases", mysqlwiz: "MariaDB Wizard", pgsql: "PostgreSQL Databases",
     pgwiz: "PostgreSQL Wizard",
     sysapps: "System Applications", appmgr: "Application Manager", phpver: "PHP Settings",
@@ -612,7 +624,6 @@
       tokens: viewAPITokens,
       hotlink: viewHotlink,
       redirects: viewRedirects,
-      modsec: viewModSec,
       leech: viewLeech,
       fixperms: viewFixPerms,
       vhosts: viewDomains,
@@ -646,7 +657,7 @@
       git: viewGit,
       inodes: viewInodes,
       about: viewAbout,
-    }[view] || mailViews()[view] || viewDashboard);
+    }[view] || mailViews()[view] || extraViews()[view] || viewDashboard);
     if (VIEW_NEEDS[view]) requireGate(root, view, VIEW_NEEDS[view], render);
     else render(root);
   }
@@ -660,7 +671,7 @@
     vhosts: ["web"], redirects: ["web"], hotlink: ["web"], indexes: ["web"], mime: ["web"], errorpages: ["web"],
     handlers: ["web"], dirprivacy: ["web"], webdisk: ["web"], phpver: ["web"],
     appstore: ["web", "mariadb"], app: ["web", "mariadb"], wordpress: ["web", "mariadb"],
-    modsec: ["web", "modsecurity"], ssl: { need: ["web"], soft: ["certbot"] },
+    modsec: ["web", "modsecurity"], visitors: ["web"], analytics: ["web"], rawaccess: ["web"], ddnshosts: { soft: ["bind9"] }, ssl: { need: ["web"], soft: ["certbot"] },
     mysql: ["mariadb"], mysqlwiz: ["mariadb"], pgsql: ["postgresql"], pgwiz: ["postgresql"],
     ftpaccounts: ["ftp"], git: ["git"], cron: ["cron"], virus: ["clamav"], firewall: ["ufw"], leech: ["fail2ban"],
     zones: { soft: ["bind9"] },
@@ -807,6 +818,7 @@
       { label: "Domains", icon: "globe", view: "vhosts" },
       { label: "Redirects", icon: "redirect", view: "redirects" },
       { label: "Zone Editor", icon: "zone", view: "zones" },
+      { label: "Dynamic DNS", icon: "refresh", view: "ddnshosts" },
     ]},
     { name: "Email", icon: "mail", tiles: [
       { label: "Email Accounts", icon: "users", view: "mailaccounts" },
@@ -831,7 +843,7 @@
       { label: "WireGuard", icon: "tunnel", view: "wireguard" },
       { label: "OpenVPN", icon: "key", view: "openvpn" },
       { label: "IPsec / IKEv2", icon: "shield", view: "ipsec" },
-      { label: "Dynamic DNS", icon: "refresh", view: "dyndns" },
+      { label: "Dynamic DNS Updater", icon: "refresh", view: "dyndns" },
       { label: "Port Checker", icon: "plug", view: "portcheck" },
       { label: "Network Monitor", icon: "radar", view: "netmon" },
       { label: "IP Blocker & Trust", icon: "ban", view: "ipblocker" },
@@ -846,7 +858,7 @@
       { label: "Manage API Tokens", icon: "token", view: "tokens" },
       { label: "Hotlink Protection", icon: "link", view: "hotlink" },
       { label: "Fail2ban", icon: "trap", view: "leech" },
-      { label: "ModSecurity", icon: "brick", view: "modsec" },
+      { label: "WAF Firewall", icon: "shield", view: "modsec" },
       { label: "Two-Factor Authentication", icon: "phone", view: "security" },
       { label: "Fix Home Permissions", icon: "home", view: "fixperms" },
       { label: "Antivirus", icon: "virus", view: "virus" },
@@ -864,9 +876,13 @@
       { label: "Inodes Usage", icon: "indexes", view: "inodes" },
     ]},
     { name: "Metrics", icon: "processes", tiles: [
-      { label: "Resource Usage", icon: "dashboard", view: "dashboard" },
+      { label: "Visitors", icon: "visitors", view: "visitors" },
+      { label: "Errors", icon: "errors", view: "errors" },
+      { label: "Bandwidth", icon: "gauge", view: "bandwidth" },
+      { label: "Raw Access", icon: "rawlog", view: "rawaccess" },
+      { label: "Analytics", icon: "chart", view: "analytics" },
+      { label: "Resource Usage", icon: "dashboard", view: "resources" },
       { label: "Processes", icon: "processes", view: "processes" },
-      { label: "Bandwidth / Network", icon: "network", view: "network" },
     ]},
     { name: "System", icon: "services", tiles: [
       { label: "Services", icon: "services", view: "services" },
@@ -4420,34 +4436,6 @@
     state.refreshHandler = load; load();
   }
 
-  // ---- ModSecurity ----
-  function viewModSec(root) {
-    const body = el("div", {}, el("div", { class: "loading", text: "Loading…" }));
-    root.append(body);
-    const jp = jobPanel(root);
-    const load = async () => {
-      await guardedLoad(async () => {
-        const d = await API.modsec();
-        body.innerHTML = "";
-        if (!d.installed) {
-          body.append(installCard("ModSecurity (Apache WAF) not installed",
-            "Install libapache2-mod-security2 to add a web application firewall to Apache.",
-            async () => { try { const r = await API.modsecInstall(); jp.run(r.job, "Installing ModSecurity"); } catch (e) { toast(e.message, "bad"); } }));
-          return;
-        }
-        body.append(el("div", { class: "card" }, [
-          el("div", { style: "display:flex;justify-content:space-between;align-items:center" }, [
-            el("h3", { text: "ModSecurity WAF", style: "margin:0" }),
-            el("span", { class: `pill ${d.enabled ? "good" : "dim"}`, text: d.enabled ? "enabled" : "disabled" }),
-          ]),
-          el("div", { style: "margin-top:12px" }, el("button", { class: "btn btn-sm", text: d.enabled ? "Disable" : "Enable",
-            onclick: async () => { try { await API.modsecToggle(!d.enabled); toast("Apache reloaded", "good"); load(); } catch (e) { toast(e.message, "bad"); } } })),
-        ]));
-      });
-    };
-    state.refreshHandler = load; load();
-  }
-
   // ---- Leech Protection (fail2ban) ----
   // ======================================================================
   //  Fail2ban — automatic brute-force protection
@@ -6818,16 +6806,29 @@
     }
 
     function card(a) {
+      const server = a.group === "server";
+      const noUnits = server && !(a.units || []).length;
       const pill = a.broken ? el("span", { class: "pill bad", text: "Install incomplete" })
+        : a.job ? el("span", { class: "pill warn", text: "Installing…" })
         : !a.installed ? el("span", { class: "pill dim", text: "Not installed" })
+        : noUnits ? el("span", { class: "pill good", text: "Installed" })
+        : a.partial ? el("span", { class: "pill warn", text: "Partly running" })
         : el("span", { class: `pill ${a.active ? "good" : "dim"}`, text: a.active ? "Running" : "Stopped" });
       const facts = [
         a.version ? `Version <b>${esc(a.version)}</b>` : null,
         a.ram_mb != null ? `RAM <b>${a.ram_mb} MB</b>` : `Typical RAM ${esc(a.ram_typical)}`,
         a.docroot ? `Web folder <code>${esc(a.docroot)}</code>` : null,
       ].filter(Boolean).join(" · ");
-      const btns = !a.installed
-        ? [el("button", { class: "btn btn-sm btn-primary", text: a.broken ? "Repair" : "Install", title: a.broken ? "The last install stopped part-way — finish it" : "", onclick: () => doInstall(a) })]
+      const configure = server && a.installed ? el("button", { class: "btn btn-sm btn-primary", text: "Configure", onclick: () => navigate(a.view) }) : null;
+      const btns = a.job ? [el("button", { class: "btn btn-sm", text: "Show progress", onclick: () => watch(a.job, `Installing ${a.name}…`) })]
+        : !a.installed
+        ? [el("button", { class: "btn btn-sm btn-primary", text: a.broken ? "Repair" : "Install", title: a.broken ? "The last install stopped part-way — finish it" : (a.needs || []).length ? `Also installs: ${a.needs.join(", ")}` : "", onclick: () => doInstall(a) })]
+        : server ? [configure,
+            a.ext ? el("a", { class: "btn btn-sm btn-ghost", href: `https://${location.hostname}${a.ext}`, target: "_blank", rel: "noopener", text: "Open ↗" }) : null,
+            noUnits ? null : a.active ? el("button", { class: "btn btn-sm", text: "Restart", onclick: () => doCtl(a, "restart") })
+                     : el("button", { class: "btn btn-sm", text: "Start", onclick: () => doCtl(a, "start") }),
+            noUnits || !a.active ? null : el("button", { class: "btn btn-sm btn-ghost", text: "Stop", onclick: () => doCtl(a, "stop") }),
+          ]
         : [
             a.active ? el("button", { class: "btn btn-sm", text: "Restart", onclick: () => doCtl(a, "restart") })
                      : el("button", { class: "btn btn-sm btn-primary", text: "Start", onclick: () => doCtl(a, "start") }),
@@ -6837,6 +6838,7 @@
       // Round icon buttons in the header: settings (gear) and, for FTP, its accounts.
       const iconBtn = (ico, label, onclick) => el("button", { class: "sa-icon-btn", type: "button", title: label, "aria-label": label, onclick }, icon(ico, 17));
       const headBtns = a.installed ? [
+        server ? iconBtn("gear", `Configure ${a.name}`, () => navigate(a.view)) : null,
         a.id === "vsftpd" ? iconBtn("users", "FTP accounts", () => navigate("ftpaccounts")) : null,
         a.id === "postgresql" ? iconBtn("database", "PostgreSQL databases", () => navigate("pgsql")) : null,
         APP_NAMES[a.id] ? iconBtn("gear", `Configure ${a.name}`, () => navigate("sysapps", { arg: a.id })) : null,
@@ -6845,7 +6847,8 @@
         el("div", { class: "sa-head" }, [el("h3", { text: a.name }), el("span", { style: "flex:1" }), pill, ...headBtns]),
         el("p", { class: "muted sa-desc", text: a.desc }),
         el("p", { class: "muted sa-facts", html: facts }),
-        el("div", { class: "sa-actions" }, btns),
+        server && a.installed && (a.units || []).length > 1 ? el("div", { class: "em-svcs sa-units" }, a.units.map((u) => el("span", { class: `em-svc ${u.active ? "on" : ""}`, title: u.active ? "running" : "stopped" }, [el("i"), u.unit]))) : null,
+        el("div", { class: "sa-actions" }, btns.filter(Boolean)),
       ]);
     }
     const grid = (apps) => el("div", { style: "display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px;margin-bottom:18px" }, apps.map(card));
@@ -6857,7 +6860,8 @@
         if (!d.supported) { body.append(el("p", { class: "empty", text: "apt/systemd not available on this host." })); return; }
         body.append(
           el("h3", { text: "Web servers" }), grid(d.apps.filter((a) => a.group === "web")),
-          el("h3", { text: "Extras" }), grid(d.apps.filter((a) => a.group !== "web")),
+          el("h3", { text: "Extras" }), grid(d.apps.filter((a) => a.group === "extra")),
+          el("h3", { text: "Mail, DNS & security" }), grid(d.apps.filter((a) => a.group === "server")),
         );
       });
     }
@@ -7920,6 +7924,15 @@
     }
     function render() { drawSteps(); content.innerHTML = ""; [stepWhere, stepDetails, stepInstall][step](); drawFoot(); }
     (async () => { try { st = await appStatus(); } catch (e) {} render(); })();
+  }
+
+  // ---- WAF, Dynamic DNS and Metrics views (frontend/js/extras.js) ----
+  let EXTRAV = null;
+  function extraViews() {
+    if (!EXTRAV && window.AuroraExtras) {
+      EXTRAV = window.AuroraExtras({ el, $, icon, btn, pill, kv, field, sw, toast, API, navigate, state, openModal, closeModal, copyText, fmtBytes, ago, downloadText, esc });
+    }
+    return EXTRAV || {};
   }
 
   // ---- Email views (frontend/js/mail.js, loaded before this file) ----

@@ -79,7 +79,7 @@ def generate_self_signed(common_name: str, days: int = 365) -> dict:
     out = subprocess.run(
         [_openssl(), "req", "-x509", "-nodes", "-newkey", "rsa:2048",
          "-keyout", str(key), "-out", str(crt), "-days", str(int(days)),
-         "-subj", f"/CN={cn}"],
+         "-subj", f"/CN={cn}", "-addext", "basicConstraints=critical,CA:FALSE", "-addext", "extendedKeyUsage=serverAuth"],
         capture_output=True, text=True, timeout=60)
     if out.returncode != 0:
         raise SSLCertError(out.stderr.strip() or "openssl failed")
@@ -191,7 +191,9 @@ def write_self_signed(crt: Path, key: Path, names: list[str], days: int = 825) -
         out = subprocess.run(
             [_openssl(), "req", "-x509", "-nodes", "-newkey", "rsa:2048", "-days", str(int(days)),
              "-keyout", str(tmp_key), "-out", str(tmp_crt), "-subj", f"/CN={cn}",
-             "-addext", "subjectAltName=" + ",".join(san_token(n) for n in clean)],
+             "-addext", "subjectAltName=" + ",".join(san_token(n) for n in clean),
+             # A server certificate, not a CA (Apache warns about CA:TRUE leaf certificates).
+             "-addext", "basicConstraints=critical,CA:FALSE", "-addext", "extendedKeyUsage=serverAuth"],
             capture_output=True, text=True, timeout=60)
         if out.returncode != 0:
             raise SSLCertError(out.stderr.strip() or "openssl failed")

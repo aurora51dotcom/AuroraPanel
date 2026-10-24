@@ -236,12 +236,13 @@ def candidate_domains() -> list[str]:
 
 LOCAL_PCRE = PF_DIR / "transport_local.pcre"
 # Bump when postfix_settings()/postfix_services() change, so existing servers pick them up on the next apply().
-CONFIG_REV = 3
+CONFIG_REV = 5
 
 
 def _write_local_pcre() -> None:
     _write(LOCAL_PCRE, HEADER + "# Mail for another device on the local network goes straight to it (found by mDNS).\n"
-                       "/^(.+\\.local)$/ smtp:[$1]\n", 0o644)
+                       # Domains only: in the full-address lookup Postfix forbids $1 and logs a warning.
+                       "/^([^@]+\\.local)$/ smtp:[$1]\n", 0o644)
 
 
 def _upgrade_config(s: dict) -> None:
@@ -253,6 +254,10 @@ def _upgrade_config(s: dict) -> None:
         _run(["postconf", "-M", f"{name}={entry}"])
         for p in params:
             _run(["postconf", "-P", f"{name}/{p}"])
+    if s.get("tls", {}).get("source", "self") != "self":
+        _apache_mailhost(hostname(s), cert, key)
+    from . import requires
+    requires.php_no_jit()
     s["config_rev"] = CONFIG_REV
     save(s)
 
@@ -1678,10 +1683,54 @@ def set_tls(source: str) -> dict:
     hook = Path("/etc/letsencrypt/renewal-hooks/deploy/aurora-mail")
     if source != "self":
         _write(hook, "#!/bin/sh\n# Written by AuroraPanel (Email): reload mail with renewed certificates.\n"
-                     "systemctl reload postfix dovecot\n", 0o755)
+                     "systemctl reload postfix dovecot\nsystemctl reload apache2 2>/dev/null || true\n", 0o755)
+    _apache_mailhost(hostname(s), cert, key if source != "self" else "")
     _run(["systemctl", "reload", "postfix"])
     _run(["systemctl", "restart", "dovecot"])
     return {"ok": True}
+
+
+MAILHOST_SITE = Path("/etc/apache2/sites-available/aurora-mailhost.conf")
+
+
+def _apache_mailhost(host: str, cert: str, key: str) -> None:
+    """HTTPS for the mail host name in Apache, with the mail server's trusted certificate, so webmail,
+    calendars, autoconfig and Dynamic DNS updates at https://<mail host>/ don't show a certificate warning.
+    Without a real certificate (key == "") the site is removed and Apache's default answers instead."""
+    if not Path("/etc/apache2/sites-available").is_dir():
+        return
+    if not key:
+        if MAILHOST_SITE.exists():
+            _run(["a2dissite", "-q", "aurora-mailhost"])
+            MAILHOST_SITE.unlink()
+            if _run(["apache2ctl", "configtest"]).returncode == 0:
+                _run(["systemctl", "reload", "apache2"])
+        return
+    text = HEADER + f"""# The mail host name over HTTPS: webmail (/webmail), calendars (/dav), autoconfig.
+<VirtualHost *:443>
+    ServerName {host}
+    DocumentRoot /var/www/html
+    SSLEngine on
+    SSLCertificateFile {cert}
+    SSLCertificateKeyFile {key}
+    ErrorLog ${{APACHE_LOG_DIR}}/{host}-error.log
+    CustomLog ${{APACHE_LOG_DIR}}/{host}-access.log combined
+</VirtualHost>
+"""
+    old = MAILHOST_SITE.read_text() if MAILHOST_SITE.exists() else None
+    if old == text:
+        return
+    _write(MAILHOST_SITE, text, 0o644)
+    _run(["a2enmod", "-q", "ssl"])
+    _run(["a2ensite", "-q", "aurora-mailhost"])
+    if _run(["apache2ctl", "configtest"]).returncode != 0:
+        if old is None:
+            _run(["a2dissite", "-q", "aurora-mailhost"])
+            MAILHOST_SITE.unlink()
+        else:
+            _write(MAILHOST_SITE, old, 0o644)
+        return
+    _run(["systemctl", "reload", "apache2"])
 
 
 def issue_cert() -> jobs.Job:

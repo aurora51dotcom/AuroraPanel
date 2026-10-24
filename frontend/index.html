@@ -50,7 +50,7 @@
         <button class="nav-item" data-view="wireguard"><span class="nav-ico">⛨</span> WireGuard</button>
         <button class="nav-item" data-view="openvpn"><span class="nav-ico">⛨</span> OpenVPN</button>
         <button class="nav-item" data-view="ipsec"><span class="nav-ico">⛨</span> IPsec / IKEv2</button>
-        <button class="nav-item" data-view="dyndns"><span class="nav-ico">🔄</span> Dynamic DNS</button>
+        <button class="nav-item" data-view="dyndns"><span class="nav-ico">🔄</span> Dynamic DNS Updater</button>
         <button class="nav-item" data-view="portcheck"><span class="nav-ico">⇅</span> Port Checker</button>
         <button class="nav-item" data-view="netmon"><span class="nav-ico">⇅</span> Network Monitor</button>
         <button class="nav-item" data-view="ipblocker"><span class="nav-ico">⛔</span> IP Blocker &amp; Trust</button>
@@ -65,6 +65,7 @@
         <button class="nav-item" data-view="vhosts"><span class="nav-ico">🌐</span> Domains</button>
         <button class="nav-item" data-view="redirects"><span class="nav-ico">↪</span> Redirects</button>
         <button class="nav-item" data-view="zones"><span class="nav-ico">🧾</span> Zone Editor</button>
+        <button class="nav-item" data-view="ddnshosts"><span class="nav-ico">🔄</span> Dynamic DNS</button>
         <div class="nav-group">Email</div>
         <button class="nav-item" data-view="email"><span class="nav-ico">✉</span> Overview</button>
         <button class="nav-item" data-view="mailaccounts"><span class="nav-ico">✉</span> Email Accounts</button>
@@ -91,10 +92,17 @@
         <button class="nav-item" data-view="tokens"><span class="nav-ico">🎟</span> API Tokens</button>
         <button class="nav-item" data-view="hotlink"><span class="nav-ico">🔗</span> Hotlink Protection</button>
         <button class="nav-item" data-view="leech"><span class="nav-ico">🪤</span> Fail2ban</button>
-        <button class="nav-item" data-view="modsec"><span class="nav-ico">🧱</span> ModSecurity</button>
+        <button class="nav-item" data-view="modsec"><span class="nav-ico">🛡</span> WAF Firewall</button>
         <button class="nav-item" data-view="security"><span class="nav-ico">🔑</span> Two-Factor Auth</button>
         <button class="nav-item" data-view="fixperms"><span class="nav-ico">🏠</span> Fix Permissions</button>
         <button class="nav-item" data-view="virus"><span class="nav-ico">🦠</span> Antivirus</button>
+        <div class="nav-group">Metrics</div>
+        <button class="nav-item" data-view="visitors"><span class="nav-ico">👤</span> Visitors</button>
+        <button class="nav-item" data-view="errors"><span class="nav-ico">⚠</span> Errors</button>
+        <button class="nav-item" data-view="bandwidth"><span class="nav-ico">⏲</span> Bandwidth</button>
+        <button class="nav-item" data-view="rawaccess"><span class="nav-ico">🗎</span> Raw Access</button>
+        <button class="nav-item" data-view="analytics"><span class="nav-ico">📈</span> Analytics</button>
+        <button class="nav-item" data-view="resources"><span class="nav-ico">◔</span> Resource Usage</button>
         <div class="nav-group">Files</div>
         <button class="nav-item" data-view="files"><span class="nav-ico">🗀</span> File Manager</button>
         <button class="nav-item" data-view="images"><span class="nav-ico">🖼</span> Images</button>
@@ -171,6 +179,7 @@
   <script src="/vendor/xterm-addon-fit.min.js"></script>
   <script src="/js/api.js?v=__V__"></script>
   <script src="/js/mail.js?v=__V__"></script>
+  <script src="/js/extras.js?v=__V__"></script>
   <script src="/js/app.js?v=__V__"></script>
 </body>
 </html>

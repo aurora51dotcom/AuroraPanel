@@ -407,7 +407,8 @@ def _ensure_selfsigned(s: dict, force: bool = False) -> None:
     SSL_DIR.mkdir(parents=True, exist_ok=True)
     san = ",".join(f"{'IP' if _is_ip(n) else 'DNS'}:{n}" for n in [s["server_name"], *s["aliases"]])
     r = _run(["openssl", "req", "-x509", "-nodes", "-newkey", "rsa:2048", "-days", "825",
-              "-keyout", key, "-out", crt, "-subj", f"/CN={s['server_name']}", "-addext", f"subjectAltName={san}"], 60)
+              "-keyout", key, "-out", crt, "-subj", f"/CN={s['server_name']}", "-addext", f"subjectAltName={san}",
+              "-addext", "basicConstraints=critical,CA:FALSE", "-addext", "extendedKeyUsage=serverAuth"], 60)
     if r.returncode != 0:
         raise SiteError(r.stderr.strip() or "openssl failed")
     Path(key).chmod(0o600)

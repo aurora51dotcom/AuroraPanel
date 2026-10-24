@@ -403,8 +403,8 @@ window.AuroraMail = (ui) => {
   async function connectDevices(addr) {
     let d;
     try { d = await API.mailDevice(addr); } catch (e) { toast(e.message, "bad"); return; }
-    const box = (title, ico, rows) => el("div", { class: "em-dev" }, [el("div", { class: "em-dev-h" }, [icon(ico, 16), el("b", { text: title })]), ...rows]);
-    openModal(`Connect devices — ${addr}`, el("div", { class: "em-form" }, [
+    const box = (title, ico, rows, wide) => el("div", { class: `em-dev ${wide ? "em-dev-wide" : ""}` }, [el("div", { class: "em-dev-h" }, [icon(ico, 16), el("b", { text: title })]), ...rows]);
+    openModal(`Connect devices - ${addr}`, el("div", { class: "em-form" }, [
       el("div", { class: "em-dev-quick" }, [
         el("a", { class: "btn btn-primary", href: `/api/mail/accounts/mobileconfig?address=${encodeURIComponent(addr)}` }, [icon("phone", 15), " iPhone / iPad / Mac profile"]),
         d.webmail ? el("a", { class: "btn btn-ghost", href: `${wm(d.webmail)}?_user=${encodeURIComponent(addr)}`, target: "_blank", rel: "noopener" }, [icon("inbox", 15), " Webmail"]) : null].filter(Boolean)),
@@ -415,7 +415,7 @@ window.AuroraMail = (ui) => {
           el("small", { class: "dm-hint", text: "Or port 587 with STARTTLS." })]),
         box("POP3 (download only)", "backup", [copyRow("Server", d.incoming.pop3.host), copyRow("Port", "995")]),
         box("Sign in", "key", [copyRow("Username", addr), el("small", { class: "dm-hint", text: "The full email address, and the account's password, for both incoming and outgoing." })]),
-        d.dav && d.dav.server ? box("Calendars & contacts", "calendar", [copyRow("Server", d.dav.server), el("small", { class: "dm-hint", text: "iPhone: Settings → Calendar → Accounts → Other → CalDAV. Android: DAVx⁵." })]) : null,
+        d.dav && d.dav.server ? box("Calendars & contacts", "calendar", [copyRow("Server", d.dav.server), el("small", { class: "dm-hint", text: "iPhone: Settings → Calendar → Accounts → Other → CalDAV. Android: DAVx⁵." })], true) : null,
       ].filter(Boolean)),
     ]), []);
     modalWide();

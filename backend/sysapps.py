@@ -66,6 +66,21 @@ CATALOG: dict[str, dict] = {
     },
 }
 WEB_SERVERS = [k for k, v in CATALOG.items() if v["group"] == "web"]
+
+# Server software the panel installs on demand (requires.COMPONENTS) — listed here too so it can be
+# started, stopped and configured in one place. "view" is the panel page that configures it.
+SERVER_APPS: dict[str, dict] = {
+    "mail": {"units": ["postfix", "dovecot", "rspamd", "redis-server"], "procs": ("master", "smtpd", "qmgr", "pickup", "dovecot", "imap", "pop3", "lmtp", "auth", "rspamd", "redis-server"),
+             "view": "email", "ram": "~120–200 MB"},
+    "webmail": {"units": [], "procs": (), "view": "mailaccounts", "ram": "runs inside Apache/PHP", "ext": "/webmail/", "name": "Webmail"},
+    "dav": {"units": ["radicale"], "procs": ("radicale",), "view": "calendars", "ram": "~20–30 MB", "name": "Calendars & Contacts"},
+    "bind9": {"units": ["named"], "procs": ("named",), "view": "zones", "ram": "~15–40 MB", "name": "DNS server"},
+    "modsecurity": {"units": [], "procs": (), "view": "modsec", "ram": "runs inside Apache", "name": "WAF Firewall"},
+    "fail2ban": {"units": ["fail2ban"], "procs": ("fail2ban-server",), "view": "leech", "ram": "~20–40 MB"},
+    "clamav": {"units": ["clamav-freshclam"], "procs": ("freshclam", "clamd"), "view": "virus", "ram": "~10 MB (scans: ~1 GB)", "name": "Antivirus"},
+    "ufw": {"units": [], "procs": (), "view": "firewall", "ram": "none (kernel rules)"},  # on/off lives on the Firewall page
+    "certbot": {"units": ["certbot.timer"], "procs": (), "view": "ssl", "ram": "none (runs twice a day)", "name": "Let's Encrypt"},
+}
 _ACTIONS = {"start", "stop", "restart"}
 
 
@@ -190,6 +205,8 @@ def _ram_mb() -> dict[str, float]:
         if not mi:
             continue
         key = by_proc.get(name) or ("phpfpm" if name.startswith("php-fpm") else None)
+        if not key:
+            key = next((k for k, v in SERVER_APPS.items() if name in v["procs"]), None)
         if key:
             totals[key] = totals.get(key, 0.0) + mi.rss / 1048576
     return {k: round(v, 1) for k, v in totals.items()}
@@ -216,6 +233,25 @@ def status() -> dict:
             "broken": not installed and v["pkg"] in broken,
             "active": bool(svc and active.get(svc)), "ram_mb": ram.get(k),
             "docroot": _docroot(k) if installed else None,
+        })
+    from . import jobs as _jobs, requires
+    units = [u for v in SERVER_APPS.values() for u in v["units"]]
+    act = _active(units)
+    for k, v in SERVER_APPS.items():
+        c = requires.COMPONENTS[k]
+        installed = requires.installed(k)
+        running = [j for j in _jobs.find(requires=k) if j.status == "running"]
+        # ufw is "active" only when the firewall is on; the unit itself is just its boot loader.
+        on = [u for u in v["units"] if act.get(u)]
+        apps.append({
+            "id": k, "name": v.get("name", c["name"]), "group": "server", "desc": c["desc"], "ram_typical": v["ram"],
+            "package": ", ".join(c["pkgs"][:3]) + ("…" if len(c["pkgs"]) > 3 else ""), "service": ", ".join(v["units"]) or None,
+            "installed": installed, "version": None, "broken": False,
+            "active": bool(v["units"]) and len(on) == len(v["units"]), "partial": bool(on) and len(on) < len(v["units"]),
+            "units": [{"unit": u, "active": bool(act.get(u))} for u in v["units"]],
+            "ram_mb": ram.get(k), "docroot": None, "view": v["view"], "ext": v.get("ext"),
+            "needs": [n for n in c.get("needs", []) if not requires.installed(n)],
+            "job": running[0].id if running else None,
         })
     return {"supported": True, "apps": apps}
 
@@ -270,6 +306,12 @@ def _check_port80(app_id: str, switch: bool):
 
 def install(app_id: str, switch: bool = False) -> jobs.Job:
     _require_linux()
+    if app_id in SERVER_APPS:
+        from . import requires
+        try:
+            return requires.install(app_id)
+        except requires.RequiresError as e:
+            raise SysAppError(str(e))
     v = _app(app_id)
     _check_port80(app_id, switch)
     global _web_cache
@@ -296,9 +338,22 @@ def uninstall(app_id: str) -> jobs.Job:
 
 def control(app_id: str, action: str, switch: bool = False) -> dict:
     _require_linux()
-    _app(app_id)
     if action not in _ACTIONS:
         raise SysAppError("Invalid action")
+    if app_id in SERVER_APPS:
+        units = SERVER_APPS[app_id]["units"]
+        if not units:
+            raise SysAppError("This runs inside Apache — restart Apache instead")
+        if action == "start":
+            cmds = [["systemctl", "enable", "--now", *units]]
+        else:
+            cmds = [["systemctl", action, *units]]
+        for cmd in cmds:
+            out = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+            if out.returncode != 0:
+                raise SysAppError(out.stderr.strip() or f"systemctl {action} failed")
+        return {"ok": True, "service": " ".join(units), "action": action}
+    _app(app_id)
     svc = _service(app_id)
     if not svc:
         raise SysAppError("This application has no service (is it installed?)")
