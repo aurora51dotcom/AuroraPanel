@@ -5881,7 +5881,7 @@
       body.append(el("div", { class: "nm-tiles" }, [
         tile("connection attempts", d.total), tile("unique sources", d.sources.length),
         tile("failed logins", d.failed_logins, d.failed_logins ? "bad" : ""), tile("blocked by bans", d.blocked_total || 0),
-        tile("most targeted", top ? `${top.service || "port"} ${top.port ?? ""}` : "—"),
+        tile(top && top.service ? `most targeted · ${top.service}` : "most targeted", top ? (top.port != null ? `:${top.port}` : top.service || "—") : "—"),
       ]));
       body.append(el("div", { class: "toolbar" }, [btn("Bans & trusted list", () => navigate("ipblocker"), "btn-ghost"), btn("Fail2ban", () => navigate("leech"), "btn-ghost")]));
       body.append(el("h2", { class: "section-title", text: "Logins & VPN events" }));

@@ -1020,7 +1020,8 @@ pre.log { background: rgba(0,0,0,0.35); border: 1px solid var(--stroke); border-
 .net-steps { margin: 0 0 14px; padding-left: 20px; display: grid; gap: 8px; line-height: 1.5; }
 .nm-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; margin: 4px 0 18px; }
 .nm-tile { padding: 14px 16px; border-radius: 16px; border: 1px solid var(--stroke); background: rgba(255,255,255,0.03); }
-.nm-tile-v { font-size: 24px; font-weight: 750; overflow-wrap: anywhere; }
+.nm-tile-v { font-size: 24px; font-weight: 750; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nm-tile-l { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .nm-tile-l { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
 .nm-tile.bad .nm-tile-v { color: var(--bad); }
 .net-chips { display: flex; flex-wrap: wrap; gap: 4px; }
