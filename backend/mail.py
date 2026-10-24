@@ -1238,6 +1238,12 @@ def apply(s: dict | None = None) -> dict:
     if s.get("config_rev") != CONFIG_REV:
         _upgrade_config(s)
         changed.add("postfix-maps")
+    # Mail to postmaster@<this host name> (bounce notices, cron) is delivered here, not looped back out —
+    # unless the host name is itself one of the mail domains (Postfix forbids listing it in both places).
+    want = "localhost" if hostname(s) in s["domains"] else "$myhostname, localhost"
+    if _run(["postconf", "-h", "mydestination"]).stdout.strip() != want:
+        _run(["postconf", "-e", f"mydestination={want}"])
+        changed.add("postfix-maps")
     for name, text in render_postfix(s).items():
         p = PF_DIR / name
         if _write(p, HEADER + text + "\n", 0o640, "root", "postfix") or not Path(str(p) + ".db").exists():
@@ -2170,8 +2176,8 @@ def set_track_settings(days: int | None = None, clear: bool = False) -> dict:
 def track(recipient: str = "", status: str = "", hours: int = 168, limit: int = 500) -> dict:
     """Delivery events from the mail log: one row per recipient per message (or SMTP rejection).
     Only the last `days` (30 by default) are shown, and nothing from before “Clear history”."""
-    ts = track_settings()
-    hours = min(int(hours), ts["days"] * 24)
+    cfg = track_settings()
+    hours = min(int(hours), cfg["days"] * 24)
     since = f"-{max(1, min(24 * 365, hours))}h"
     r = _run(["journalctl", "SYSLOG_FACILITY=2", "--since", since, "-o", "short-iso", "--no-pager", "-q"], 60)
     text = r.stdout
@@ -2218,10 +2224,10 @@ def track(recipient: str = "", status: str = "", hours: int = 168, limit: int = 
             rows.append({"time": ts, "id": qid, "status": "rejected", "to": (re.search(r"to=<([^>]*)>", info) or [None, ""])[1],
                          "from": (re.search(r"from=<([^>]*)>", info) or [None, ""])[1], "result": info.split(":", 1)[-1][:200],
                          "client": mg.get("client", "")})
-    if ts["cleared"]:
+    if cfg["cleared"]:
         def after(r_):
             try:
-                return datetime.fromisoformat(r_["time"]).timestamp() > ts["cleared"]
+                return datetime.fromisoformat(r_["time"]).timestamp() > cfg["cleared"]
             except (ValueError, TypeError):
                 return True
         rows = [r_ for r_ in rows if after(r_)]
@@ -2239,7 +2245,7 @@ def track(recipient: str = "", status: str = "", hours: int = 168, limit: int = 
     counts: dict[str, int] = {}
     for x in rows:
         counts[x["status"]] = counts.get(x["status"], 0) + 1
-    return {"events": rows[:limit], "total": len(rows), "counts": counts, "settings": ts}
+    return {"events": rows[:limit], "total": len(rows), "counts": counts, "settings": cfg}
 
 
 def _spam_scores() -> dict[str, float]:

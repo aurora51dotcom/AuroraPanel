@@ -6,6 +6,8 @@ window.AuroraMail = (ui) => {
   const { el, icon, btn, pill, kv, field, sw, toast, API, navigate, state, openModal, closeModal, copyText,
     fmtBytes, ago, downloadText, esc } = ui;
   const MAIL = {};  // small per-session cache (domains for pickers)
+  const LS_get = (k, d) => { try { const v = localStorage.getItem("ap." + k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } };
+  const LS_set = (k, v) => { try { localStorage.setItem("ap." + k, JSON.stringify(v)); } catch (e) {} };
   // Webmail is served by the web server (port 443), not by the panel's own port.
   const wm = (path) => (path && path.startsWith("/") ? `https://${location.hostname}${path}` : path);
 
@@ -108,9 +110,9 @@ window.AuroraMail = (ui) => {
       const r = el("input", { type: "radio", name, value: o.value });
       r.checked = o.value === value;
       r.onchange = () => onChange && onChange(o.value);
-      box.append(el("label", { class: `em-rcard ${o.tone || ""}` }, [r, el("div", {}, [
-        el("div", { class: "em-rcard-t" }, [o.icon ? icon(o.icon, 16) : null, el("b", { text: o.label }), o.badge ? pill(o.badge, o.badgeKind || "good") : null].filter(Boolean)),
-        o.desc ? el("p", { class: "muted", text: o.desc }) : null, o.extra || null].filter(Boolean))]));
+      box.append(el("label", { class: `em-rcard ${o.tone || ""}` }, [r, o.icon ? el("span", { class: "em-rcard-ico" }, icon(o.icon, 18)) : null, el("div", {}, [
+        el("div", { class: "em-rcard-t" }, [el("b", { text: o.label }), o.badge ? pill(o.badge, o.badgeKind || "good") : null].filter(Boolean)),
+        o.desc ? el("p", { class: "muted", text: o.desc }) : null, o.extra || null].filter(Boolean))].filter(Boolean)));
     });
     box.value = () => (box.querySelector("input:checked") || {}).value;
     return box;
@@ -498,7 +500,7 @@ window.AuroraMail = (ui) => {
     if (!MAIL.domains.length) { root.append(el("div", { class: "card" }, empty("route", "No mail domains yet", "Add a domain first.", btn("Add a domain", () => addDomainModal(() => navigate("mailrouting", { history: "none" })), "btn-primary")))); return; }
     const sel = domainSelect(MAIL.domains, state.mailDomain && MAIL.domains.includes(state.mailDomain) ? state.mailDomain : MAIL.domains[0]);
     const body = el("div");
-    root.append(el("div", { class: "card" }, [field("Domain", sel), body]));
+    root.append(el("div", { class: "card em-routing" }, [el("div", { class: "em-route-dom" }, [el("span", { class: "muted", text: "Domain" }), sel]), body]));
     const draw = async () => {
       state.mailDomain = sel.value;
       body.innerHTML = ""; body.append(el("div", { class: "loading", text: "Looking up MX records…" }));
@@ -512,11 +514,15 @@ window.AuroraMail = (ui) => {
         { value: "local", label: "Local mail exchanger", desc: "This server receives and stores the domain's mail, even if MX records point elsewhere.", badge: cur === "local" ? "current" : null, icon: "inbox" },
         { value: "backup", label: "Backup mail exchanger", desc: "Accept and hold mail when the main server is down, then pass it on.", badge: cur === "backup" ? "current" : null, icon: "backup" },
         { value: "remote", label: "Remote mail exchanger", desc: "Another service hosts this domain's mailboxes. Mail sent from here to the domain goes out to it.", badge: cur === "remote" ? "current" : null, icon: "send" }], cur);
-      body.append(cards, el("h4", { class: "em-sub", text: "MX records found" }),
-        r.mx.length ? el("div", { class: "em-mx" }, r.mx.map(([p, h]) => el("div", {}, [pill(String(p)), el("code", { class: "em-mono", text: h }), h === r.hostname ? pill("this server", "good") : null].filter(Boolean))))
+      const save = btn("Save routing", () => call(() => API.mailRouting(sel.value, cards.value()), "Routing saved", draw), "btn-primary");
+      save.disabled = true;
+      cards.addEventListener("change", () => { save.disabled = cards.value() === cur; });
+      body.append(cards, el("div", { class: "em-mxbox" }, [
+        el("div", { class: "em-mxbox-h" }, [el("b", { text: "MX records for " + sel.value }), el("span", { class: "muted", text: "Where the internet sends this domain's mail" })]),
+        r.mx.length ? el("div", { class: "em-mx" }, r.mx.map(([p, h]) => el("div", { class: "em-mx-row" }, [el("span", { class: "em-mx-pri", title: "Priority (lower is tried first)", text: String(p) }),
+          el("code", { class: "em-mono", text: h }), h === r.hostname ? pill("this server", "good") : pill("another server")])))
           : el("p", { class: "muted", text: "No MX records — mail falls back to the domain's A record. Publish one under Email Deliverability." }),
-        el("div", { class: "toolbar" }, [btn("Change", () => call(() => API.mailRouting(sel.value, cards.value()), "Routing saved", draw), "btn-primary"),
-          btn("Zone Editor", () => navigate("zones"), "btn-ghost")]));
+      ]), el("div", { class: "em-route-act" }, [save, btn("Zone Editor", () => navigate("zones"), "btn-ghost")]));
     };
     sel.onchange = draw; draw();
   }
@@ -655,51 +661,109 @@ window.AuroraMail = (ui) => {
   }
 
   // ------------------------------------------------------------------ Track delivery
+  // Plain-English reading of one delivery event: what happened, and what (if anything) to do about it.
+  const PROVIDERS = [[/google|gmail/, "Gmail"], [/outlook|hotmail|protection\.outlook|microsoft/, "Outlook / Microsoft 365"], [/yahoo|yahoodns/, "Yahoo"],
+    [/icloud|apple|me\.com/, "iCloud"], [/yandex/, "Yandex"], [/mail\.ru/, "Mail.ru"], [/proton/, "Proton Mail"], [/zoho/, "Zoho"], [/gmx|web\.de/, "GMX"]];
+  function trackExplain(x) {
+    const r = (x.result || "").toLowerCase(), relay = (x.relay || "").toLowerCase();
+    const local = /lmtp|dovecot|private\/|local|virtual|pipe/.test(relay);
+    const dir = x.status === "rejected" || local ? "in" : "out";
+    const host = (relay.split("[")[0] || "").replace(/\.$/, "");
+    const prov = (PROVIDERS.find(([rx]) => rx.test(relay)) || [0, ""])[1];
+    let what, fix = "";
+    if (x.status === "sent") {
+      what = local ? "Delivered to the mailbox" : `Delivered to ${prov || host || "the receiving server"}`;
+      if (x.spam != null && x.spam >= 5) fix = "It got through, but our spam check scored it high — the receiver may file it as spam.";
+    } else if (x.status === "deferred") {
+      what = /greylist|try again later|4\.7\.1|temporar/.test(r) ? "Receiver asked us to try again later — retrying automatically"
+        : /timed out|refused|unreachable|no route|lost connection/.test(r) ? "Couldn't reach the receiving server — retrying automatically"
+        : /rate|too many|throttl/.test(r) ? "Receiver is limiting how fast we send — retrying automatically"
+        : /tls|certificate|ssl/.test(r) ? "Secure (TLS) connection to the receiver failed — retrying"
+        : /quota|full/.test(r) ? "Their mailbox is full for now — retrying" : "Temporary problem — retrying automatically";
+      fix = "Nothing to do yet: the server keeps retrying for up to 5 days. Mail Queue shows what's waiting.";
+    } else if (x.status === "bounced" || x.status === "expired") {
+      if (/user unknown|5\.1\.1|does not exist|no such user|unknown user|recipient not found|invalid recipient|address rejected/.test(r)) { what = "That email address doesn't exist"; fix = "Check the spelling of the address."; }
+      else if (/spf|dkim|dmarc|5\.7\.(1|23|25|26)|spam|blocked|blacklist|blocklist|reputation|policy/.test(r)) { what = "Refused as spam or not authenticated"; fix = "Open Deliverability: SPF, DKIM, DMARC and reverse DNS (PTR) must all be green."; }
+      else if (/quota|mailbox full|5\.2\.2|over quota/.test(r)) { what = "Their mailbox is full"; fix = "Nothing you can fix — try again later or reach them another way."; }
+      else if (/too large|size|5\.3\.4/.test(r)) { what = "The message was too large for the receiver"; fix = "Send the attachment as a link instead."; }
+      else if (x.status === "expired") { what = "Gave up after retrying for days"; fix = "The receiving server never accepted it — check the address or their server."; }
+      else { what = "The receiving server refused it permanently"; fix = "The server's answer below says why."; }
+    } else if (x.status === "rejected") {
+      if (/relay access denied/.test(r)) { what = "Refused: tried to use this server to relay mail to others"; fix = "Normal — that's a spammer probing. Nothing to do."; }
+      else if (/user unknown|recipient address rejected|unknown in virtual|no such user|5\.1\.1/.test(r)) { what = "Refused: no such mailbox here"; fix = "If it should exist, create it in Email Accounts or add a Forwarder."; }
+      else if (/blocked using|rbl|spamhaus|dnsbl/.test(r)) { what = "Refused: the sender's IP is on a spam blocklist"; fix = "Normal protection. If it's someone you know, add them to the Spam Filters allow list."; }
+      else if (/spam|milter|gtube|rspamd/.test(r)) { what = "Blocked by the spam filter"; fix = "If this was real mail, add the sender to the allow list in Spam Filters."; }
+      else if (/helo|hostname/.test(r)) { what = "Refused: the sender's server introduced itself badly"; fix = "Usually a spam bot. Nothing to do."; }
+      else if (/sender address rejected|not owned by user|not logged in|authentication/.test(r)) { what = "Refused: this sender isn't allowed to send as that address"; fix = "Sign in with the matching account, or check the account's sending restrictions."; }
+      else { what = "Refused when it arrived"; fix = "The server's answer below says why."; }
+    } else what = x.result || x.status;
+    return { dir, what, fix, prov };
+  }
+
   async function viewTrack(root) {
-    const v = { hours: 24, status: "" };
-    const q = el("input", { type: "search", placeholder: "Recipient or sender (optional)", class: "em-search", onkeydown: (e) => { if (e.key === "Enter") load(); } });
+    const v = { hours: LS_get("track.hours", 24), status: "", q: "" };
+    const q = el("input", { type: "search", placeholder: "Search an address, domain or reason…", class: "em-search" });
+    let qt = null;
+    q.addEventListener("input", () => { clearTimeout(qt); qt = setTimeout(() => { v.q = q.value.trim().toLowerCase(); draw(); }, 120); });
     const range = el("div", { class: "cw-seg cw-seg-sm" });
-    [[1, "1 hour"], [24, "24 hours"], [168, "7 days"], [720, "30 days"]].forEach(([h, l]) => range.append(el("button", { type: "button", class: v.hours === h ? "active" : "", text: l, onclick: (e) => { v.hours = h; range.querySelectorAll("button").forEach((b) => b.classList.toggle("active", b === e.target)); load(); } })));
-    const chips = el("div", { class: "em-chips" });
+    [[1, "1 hour"], [24, "24 hours"], [168, "7 days"], [720, "30 days"]].forEach(([h, l]) => range.append(el("button", { type: "button", class: v.hours === h ? "active" : "", text: l,
+      onclick: (e) => { v.hours = h; LS_set("track.hours", h); range.querySelectorAll("button").forEach((b) => b.classList.toggle("active", b === e.target)); load(); } })));
+    const tiles = el("div", { class: "em-trk-tiles" });
     const table = el("div", {}, el("div", { class: "loading", text: "Reading the mail log…" }));
     const keep = el("select", { class: "em-age", title: "How long Track Delivery shows history" },
       [[7, "Keep 7 days"], [30, "Keep 30 days"], [90, "Keep 90 days"], [365, "Keep a year"]].map(([d, l]) => el("option", { value: d, text: l })));
     keep.onchange = () => call(() => API.mailTrackSettings({ days: +keep.value }), "History setting saved", load);
     const clearBtn = armed("Clear history", "Click again to clear", () => call(() => API.mailTrackSettings({ clear: true }), "History cleared", load), "btn-ghost");
-    root.append(pageHead("Track Delivery", "Every message this server accepted, sent, deferred or refused — and why.", [keep, clearBtn, btn("Send a test email", () => testMail(), "btn-ghost")]),
-      el("div", { class: "card em-pad0" }, [el("div", { class: "em-tools-bar" }, [q, btn("Run report", () => load(), "btn-primary"), range]), chips, table]));
-    const ST = { sent: ["Delivered", "good", "✓"], deferred: ["Deferred", "warn", "⏳"], bounced: ["Bounced", "bad", "!"], rejected: ["Rejected", "bad", "⛔"], expired: ["Expired", "bad", "!"] };
+    root.append(pageHead("Track Delivery", "Every email this server received or sent, and what happened to it — in plain words.", [keep, clearBtn, btn("Send a test email", () => testMail(), "btn-primary")]),
+      tiles, el("div", { class: "card em-pad0" }, [el("div", { class: "em-tools-bar" }, [q, el("span", { class: "grow" }), range]), table]));
+    const GROUPS = [["sent", "Delivered", "good", "check", ["sent"]], ["deferred", "Retrying", "warn", "clock", ["deferred"]],
+      ["bounced", "Bounced", "bad", "warning", ["bounced", "expired"]], ["rejected", "Refused", "bad", "ban", ["rejected"]]];
+    const ST = { sent: ["Delivered", "good", "✓"], deferred: ["Retrying", "warn", "⏳"], bounced: ["Bounced", "bad", "!"], rejected: ["Refused", "bad", "⛔"], expired: ["Expired", "bad", "!"] };
     let data;
     async function load() {
       table.innerHTML = ""; table.append(el("div", { class: "loading", text: "Reading the mail log…" }));
-      try { data = await API.mailTrack(q.value.trim(), "", v.hours); } catch (e) { table.innerHTML = ""; table.append(el("p", { class: "empty", text: e.message })); return; }
+      try { data = await API.mailTrack("", "", v.hours); } catch (e) { table.innerHTML = ""; table.append(el("p", { class: "empty", text: e.message })); return; }
       if (data.settings) keep.value = String(data.settings.days);
+      data.events.forEach((x) => { x._e = trackExplain(x); });
       draw();
     }
     function draw() {
-      chips.innerHTML = "";
-      chips.append(el("button", { type: "button", class: `em-chip ${!v.status ? "on" : ""}`, text: `All (${data.total})`, onclick: () => { v.status = ""; draw(); } }),
-        ...Object.entries(data.counts).map(([k, n]) => el("button", { type: "button", class: `em-chip ${v.status === k ? "on" : ""}`, text: `${(ST[k] || [k])[0]} (${n})`, onclick: () => { v.status = k; draw(); } })));
-      const rows = data.events.filter((x) => !v.status || x.status === v.status);
+      if (!data) return;
+      const c = data.counts || {};
+      tiles.innerHTML = "";
+      tiles.append(...GROUPS.map(([k, label, tone, ico, sts]) => {
+        const n = sts.reduce((a, s) => a + (c[s] || 0), 0);
+        return el("button", { type: "button", class: `em-trk-tile ${tone} ${v.status === k ? "on" : ""} ${n ? "" : "zero"}`, onclick: () => { v.status = v.status === k ? "" : k; draw(); } },
+          [el("span", { class: "em-trk-ico" }, icon(ico, 16)), el("b", { text: String(n) }), el("span", { text: label })]);
+      }));
+      const grp = GROUPS.find((g) => g[0] === v.status);
+      const rows = data.events.filter((x) => (!grp || grp[4].includes(x.status)) &&
+        (!v.q || `${x.from} ${x.to} ${x.result} ${x._e.what} ${x.relay} ${x.client}`.toLowerCase().includes(v.q)));
       table.innerHTML = "";
-      if (!rows.length) { table.append(empty("pin", "Nothing in this period", "Send a test email to see one here.")); return; }
-      table.append(el("div", { class: "table-wrap" }, el("table", { class: "em-table" }, [
-        el("thead", {}, el("tr", {}, ["", "Time", "From", "To", "Result", "Spam"].map((h) => el("th", { text: h })))),
-        el("tbody", {}, rows.slice(0, 500).map((x) => {
-          const s = ST[x.status] || [x.status, "dim", "?"];
-          return el("tr", { class: "em-click", onclick: () => detail(x) }, [el("td", {}, el("span", { class: `em-ev ${s[1]}`, title: s[0], text: s[2] })),
-            el("td", { class: "em-nowrap", text: new Date(x.time).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", second: "2-digit" }) }),
-            el("td", { class: "em-ell", text: x.from || "—" }), el("td", { class: "em-ell", text: x.to || "—" }),
-            el("td", { class: "em-ell", text: x.result || s[0] }), el("td", { text: x.spam != null ? x.spam.toFixed(1) : "—" })]);
-        })),
-      ])));
+      if (!data.events.length) { table.append(empty("pin", "No email in this period", "Send a test email and it shows up here within seconds.", btn("Send a test email", () => testMail(), "btn-primary"))); return; }
+      if (!rows.length) { table.append(empty("search", "Nothing matches", "Clear the search or pick another tile.")); return; }
+      table.append(el("div", { class: "em-trk-list" }, rows.slice(0, 500).map((x) => {
+        const s = ST[x.status] || [x.status, "dim", "?"], e = x._e;
+        return el("button", { type: "button", class: `em-trk-row ${s[1]}`, onclick: () => detail(x) }, [
+          el("span", { class: `em-ev ${s[1]}`, title: s[0], text: s[2] }),
+          el("span", { class: `em-trk-dir ${e.dir}`, title: e.dir === "in" ? "Received by this server" : "Sent out by this server", text: e.dir === "in" ? "↓ In" : "↑ Out" }),
+          el("span", { class: "em-trk-who" }, [el("span", { class: "em-ell", text: x.from || "(no sender)" }), el("span", { class: "muted", text: " → " }), el("b", { class: "em-ell", text: x.to || "—" })]),
+          el("span", { class: "em-trk-what em-ell", title: x.result || "", text: e.what }),
+          x.spam != null ? el("span", { class: `em-trk-spam ${x.spam >= 5 ? "hi" : ""}`, title: "Spam score (5 or more = likely spam)", text: x.spam.toFixed(1) }) : el("span"),
+          el("span", { class: "muted em-nowrap em-trk-time", text: new Date(x.time).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) }),
+        ]);
+      })), rows.length > 500 ? el("p", { class: "muted", style: "padding:10px 16px", text: `Showing the newest 500 of ${rows.length}.` }) : null);
     }
     function detail(x) {
-      openModal("Delivery details", el("div", {}, [kv([["Status", pill((ST[x.status] || [x.status])[0], (ST[x.status] || [0, "dim"])[1])], ["Time", new Date(x.time).toLocaleString()],
-        ["From", x.from || "—"], ["To", x.to || "—"], ["Queue ID", x.id || "—"], ["Sent via", x.relay || "—"], ["Delay", x.delay != null ? `${x.delay}s` : "—"],
-        ["Client", x.client || "—"], ["Signed-in user", x.user || "—"], ["Spam score", x.spam != null ? String(x.spam) : "—"]]),
-        el("h4", { class: "em-sub", text: "Server's answer" }), el("pre", { class: "log", text: x.result || "—" })]),
-        [x.to ? btn("Trace this address", () => traceModal(x.to), "btn-ghost") : null].filter(Boolean));
+      const s = ST[x.status] || [x.status, "dim"], e = x._e;
+      openModal("What happened to this email", el("div", {}, [
+        el("div", { class: `em-trk-verdict ${s[1]}` }, [el("b", { text: e.what }), e.fix ? el("span", { text: e.fix }) : null]),
+        kv([["Status", pill(s[0], s[1])], ["Direction", e.dir === "in" ? "Received by this server" : "Sent out by this server"], ["Time", new Date(x.time).toLocaleString()],
+          ["From", x.from || "—"], ["To", x.to || "—"], ["Handed to", x.relay ? `${x.relay}${e.prov ? ` (${e.prov})` : ""}` : "—"], ["Took", x.delay != null ? `${x.delay}s` : "—"],
+          ["Came from", x.client || "—"], ["Signed-in user", x.user || "—"], ["Spam score", x.spam != null ? `${x.spam} ${x.spam >= 5 ? "(likely spam)" : "(fine)"}` : "—"], ["Queue ID", x.id || "—"]]),
+        el("h4", { class: "em-sub", text: "The receiving server's exact answer" }), el("pre", { class: "log", text: x.result || "—" })]),
+        [x.to ? btn("Trace this address", () => traceModal(x.to), "btn-ghost") : null, x.status === "deferred" ? btn("Mail Queue", () => { closeModal(); navigate("mailqueue"); }, "btn-ghost") : null,
+          /spf|dkim|dmarc|spam/i.test(x.result || "") ? btn("Deliverability", () => { closeModal(); navigate("deliverability"); }, "btn-ghost") : null].filter(Boolean));
     }
     load();
   }
